@@ -170,6 +170,10 @@ HTML = """<!DOCTYPE html>
   button{background:#21262d;color:#c9d1d9;border:1px solid #30363d;
          border-radius:6px;padding:6px 14px;cursor:pointer}
   button:hover{background:#30363d}
+  #logwrap{max-height:88px;overflow-y:auto;padding:6px 16px;background:#080b10;
+           border-top:1px solid #21262d;font-size:12px;color:#8b949e}
+  #logwrap div{padding:1px 0}
+  .phase{color:#d29922;font-weight:600}
   /* ---------- MOBIL ---------- */
   @media (max-width:720px){
     #top{gap:8px 12px;padding:10px 12px}
@@ -188,12 +192,12 @@ HTML = """<!DOCTYPE html>
     #ctrl{gap:16px;padding:12px}
     input[type=range]{width:100%;max-width:none}
     #ctrl label{flex-basis:100%}
+    /* Log: fold helt ud som del af sidescroll — ingen indre scroll-fælde */
+    #logwrap{max-height:none;overflow:visible;font-size:14px;line-height:1.7;
+             padding:12px 16px calc(24px + env(safe-area-inset-bottom))}
+    #logwrap div{padding:3px 0}
   }
   @media (max-width:400px){ #emerge{grid-template-columns:repeat(2,1fr)} }
-  #logwrap{max-height:88px;overflow-y:auto;padding:6px 16px;background:#080b10;
-           border-top:1px solid #21262d;font-size:12px;color:#8b949e}
-  #logwrap div{padding:1px 0}
-  .phase{color:#d29922;font-weight:600}
   /* --- Help overlay --- */
   #helpbtn{margin-left:auto;background:#1f6feb;border-color:#1f6feb;color:#fff;
            font-weight:600;padding:5px 12px}
