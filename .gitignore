@@ -8,6 +8,10 @@ env/
 # Live simulation state & generated data (repo ships clean)
 data/state.json
 data/*.log
+data/phase_log.md
+data/logbog.md
+data/findings.md
+data/hypotheses.json
 data/backup/
 
 # OS / editor cruft
