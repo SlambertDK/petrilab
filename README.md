@@ -10,6 +10,11 @@ falsifiable hypotheses, tests each one against a control (one mechanism at a tim
 both confirmations *and* honest negative results. This repository ships a real evidence chain
 of 9 hypotheses produced this way — 6 confirmed, 3 inconclusive.
 
+![PetriLab dashboard](docs/screenshot.png)
+
+*The live dashboard: emergence metrics, a trend graph with phase-transition markers, and the
+living network. Fully responsive — desktop and mobile.*
+
 ---
 
 ## The core idea
