@@ -6,6 +6,7 @@ the gardener (and Henrik) reads off.
 """
 
 import math
+import zlib
 from collections import deque
 
 
@@ -20,10 +21,20 @@ class Metrics:
             "complexity": deque(maxlen=400),
             "spatial": deque(maxlen=400),
             "comm": deque(maxlen=400),
+            "novelty": deque(maxlen=400),
         }
         self.node_lifespans = {}   # id -> how many generations it has lived
         self.phase_events = []     # detected jumps
         self._last_phase = {}      # metric -> (gen, direction) for cooldown
+        # --- NOVELTY (open-endedness detector) ---
+        # A cheap coarse "state signature" per generation. If the system keeps
+        # visiting states it has NEVER seen before, novelty stays > 0 (a spiral).
+        # If it oscillates back to old states (a circle), novelty decays to 0.
+        # This distinguishes true accumulating novelty from mere oscillation —
+        # the thing the old phase-transition counter is blind to.
+        self._seen_signatures = set()      # every state signature ever observed
+        self._recent_sigs = deque(maxlen=200)  # rolling window of recent signatures
+        self._sig_stream = deque(maxlen=1000)  # raw signature chars for compressibility
 
     # -----------------------------------------------------------
     def compute(self, sim):
@@ -106,6 +117,30 @@ class Metrics:
         else:
             comm = 0.0
 
+        # 8) NOVELTY (open-endedness): does the system keep entering states it
+        #    has NEVER been in before, or does it revisit old ones (oscillation)?
+        #    Build a coarse signature of the current macrostate. Discretised so
+        #    tiny numeric jitter doesn't count as "new", but genuine structural
+        #    change does. Then: what fraction of the recent window is unseen?
+        def _bin(x, step):
+            return int(x / step) if step else 0
+        sig = "|".join(str(v) for v in (
+            _bin(modularity, 0.1),       # structural shape (coarse: ~10 buckets)
+            _bin(complexity, 2.0),       # coarse complexity band
+            min(depth, 6),
+            _bin(spatial, 0.2),          # coarse spatial band
+            _bin(math.log1p(n), 1.0),    # scale band (log)
+            min(_bin(cycles, 10), 5),    # coarse cycle band, capped
+        ))
+        is_new = sig not in self._seen_signatures
+        self._seen_signatures.add(sig)
+        self._recent_sigs.append(1 if is_new else 0)
+        self._sig_stream.append(sig)
+        # novelty_rate: fraction of the recent window that was first-ever-seen.
+        # Oscillation -> recent states are all old -> decays to 0.
+        # Open-ended  -> keeps minting new states -> stays > 0.
+        novelty = round(sum(self._recent_sigs) / len(self._recent_sigs), 4) if self._recent_sigs else 0.0
+
         vals = {
             "modularity": round(modularity, 4),
             "cycles": cycles,
@@ -114,6 +149,7 @@ class Metrics:
             "complexity": round(complexity, 3),
             "spatial": round(spatial, 3),
             "comm": comm,
+            "novelty": novelty,
         }
 
         # Store in time series + check for phase transitions

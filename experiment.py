@@ -60,13 +60,14 @@ DEFAULTS = {
 WARMUP = 1500      # generations before we start measuring (settling)
 MEASURE = 800      # measurement window after warmup
 SHOCK_RECOVER = 400  # generations to recover after shock
-SEEDS = [11, 23, 42, 77, 101]   # more seeds = softens stochastic noise
+SEEDS = [11, 23, 42, 77, 101, 137, 199, 251, 313, 389,
+         457, 521, 599, 661, 733, 809, 877, 941, 1013, 1097]   # 20 seeds: enough for a 95% CI
 
 
 def _measure_window(sim, n):
     """Run n generations, collect metric time series."""
     series = {"nodes": [], "edges": [], "complexity": [], "modularity": [],
-              "cycles": [], "persistence": [], "spatial": []}
+              "cycles": [], "persistence": [], "spatial": [], "novelty": []}
     for _ in range(n):
         sim.step()
         series["nodes"].append(len(sim.nodes))
@@ -77,6 +78,7 @@ def _measure_window(sim, n):
         series["cycles"].append(m.get("cycles", 0))
         series["persistence"].append(m.get("persistence", 0))
         series["spatial"].append(m.get("spatial", 0))
+        series["novelty"].append(m.get("novelty", 0))
     return series
 
 
@@ -123,6 +125,7 @@ def run_one(params, seed, do_shock=True):
         "spatial": round(_mean(s["spatial"]), 3),
         "volatility": round(volatility, 3),
         "innovation": round(innovation, 3),
+        "novelty": round(_mean(s["novelty"]), 4),
     }
 
     # 3) SHOCK: remove 50% of the cells at random -> measure recovery
@@ -149,10 +152,12 @@ def run_condition(label, params):
     agg = {}
     keys = ["survival", "nodes_mean", "edges_mean", "complexity",
             "modularity", "cycles", "persistence", "spatial", "volatility",
-            "recovery", "innovation"]
+            "recovery", "innovation", "novelty"]
     for k in keys:
         vals = [r[k] for r in runs if r.get(k) is not None]
         agg[k] = round(statistics.mean(vals), 3) if vals else 0.0
+    # Keep raw per-seed values so callers can compute confidence intervals.
+    agg["_raw"] = {k: [r[k] for r in runs if r.get(k) is not None] for k in keys}
     agg["label"] = label
     agg["params"] = params
     return agg

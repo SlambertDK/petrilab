@@ -119,6 +119,24 @@ def test_hypothesis(hid):
     va, vb = res_a.get(metric, 0.0), res_b.get(metric, 0.0)
     eff = _relative_effect(va, vb)
 
+    # --- 95% CI on the difference (b - a) via per-seed bootstrap ---
+    # A verdict is only trustworthy if the effect survives stochastic noise.
+    raw_a = res_a.get("_raw", {}).get(metric, [])
+    raw_b = res_b.get("_raw", {}).get(metric, [])
+    ci_lo, ci_hi, ci_excludes_zero = None, None, None
+    if len(raw_a) >= 3 and len(raw_b) >= 3:
+        import random as _rnd
+        _r = _rnd.Random(12345)
+        diffs = []
+        for _ in range(2000):
+            ma = sum(_r.choice(raw_a) for _ in raw_a) / len(raw_a)
+            mb = sum(_r.choice(raw_b) for _ in raw_b) / len(raw_b)
+            diffs.append(mb - ma)
+        diffs.sort()
+        ci_lo = round(diffs[int(0.025 * len(diffs))], 4)
+        ci_hi = round(diffs[int(0.975 * len(diffs))], 4)
+        ci_excludes_zero = (ci_lo > 0) or (ci_hi < 0)
+
     # Direction: predicted "b>a" or "b<a"
     direction = t.get("direction", "b>a")
     min_eff = t.get("min_effect", 0.15)
@@ -129,8 +147,12 @@ def test_hypothesis(hid):
     else:
         predicted_ok = abs(eff) >= min_eff
 
-    # Honest verdict
-    if predicted_ok:
+    # Honest verdict — now gated on the CI excluding zero.
+    # If the CI crosses zero the effect is not distinguishable from noise,
+    # no matter how big the point estimate looks.
+    if ci_excludes_zero is False:
+        status = "inconclusive"   # effect not separable from stochastic noise
+    elif predicted_ok:
         status = "confirmed"
     elif abs(eff) < min_eff:
         status = "inconclusive"   # effect too small to say anything
@@ -142,9 +164,12 @@ def test_hypothesis(hid):
         "metric": metric,
         "a_value": va, "b_value": vb,
         "relative_effect": round(eff, 4),
+        "ci95_diff": [ci_lo, ci_hi],
+        "ci_excludes_zero": ci_excludes_zero,
         "direction_predicted": direction,
         "min_effect": min_eff,
-        "full_a": res_a, "full_b": res_b,
+        "full_a": {k: v for k, v in res_a.items() if k != "_raw"},
+        "full_b": {k: v for k, v in res_b.items() if k != "_raw"},
     }
     h["evidence"].append(evidence)
     h["status"] = status
