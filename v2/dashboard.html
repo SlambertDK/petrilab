@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>PetriLab — Artificial Life Observatory</title>
+<style>
+  :root{
+    --bg:#080b11; --panel:#0e1420; --panel2:#121a29; --line:#1c2740;
+    --ink:#dfe8f6; --dim:#8ea3c4; --faint:#5b6f92;
+    --cyan:#22e3c4; --blue:#3f7bff; --red:#ff5470; --amber:#ffbb3c;
+    --green:#39d98a; --violet:#a56bff;
+    --mono:'SFMono-Regular',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:radial-gradient(1200px 600px at 70% -10%,#101a2e 0%,var(--bg) 60%);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased}
+  a{color:var(--cyan)}
+  .wrap{max-width:1600px;margin:0 auto;padding:14px}
+  /* ---------- header ---------- */
+  header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid var(--line);border-radius:16px;padding:14px 18px;margin-bottom:14px}
+  .logo{display:flex;align-items:center;gap:12px}
+  .logo .dot{width:34px;height:34px;border-radius:50%;
+    background:radial-gradient(circle at 35% 30%,var(--cyan),#0a3d3a 70%);
+    box-shadow:0 0 18px rgba(34,227,196,.6)}
+  .logo h1{font-size:20px;letter-spacing:3px;margin:0;font-weight:700}
+  .logo h1 b{color:var(--cyan)}
+  .logo .sub{font-size:10px;letter-spacing:2px;color:var(--faint);margin-top:2px}
+  .stats{display:flex;gap:10px;margin-left:auto;flex-wrap:wrap}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:8px 16px;text-align:center;min-width:78px}
+  .stat .v{font-family:var(--mono);font-size:22px;font-weight:700}
+  .stat .k{font-size:9px;letter-spacing:1.5px;color:var(--faint);margin-top:2px}
+  .ctrls{display:flex;align-items:center;gap:12px}
+  button.ctl{background:var(--panel);border:1px solid var(--line);color:var(--ink);
+    border-radius:10px;padding:9px 14px;font-family:var(--mono);font-size:12px;cursor:pointer}
+  button.ctl:hover{border-color:var(--cyan);color:var(--cyan)}
+  .speed{display:flex;flex-direction:column;gap:3px;font-size:9px;color:var(--faint);letter-spacing:1px}
+  input[type=range]{accent-color:var(--cyan);width:110px}
+  /* ---------- layout grid ---------- */
+  .grid{display:grid;grid-template-columns:1.35fr 1fr;gap:14px}
+  .col{display:flex;flex-direction:column;gap:14px}
+  .panel{background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid var(--line);border-radius:16px;overflow:hidden}
+  .phead{display:flex;align-items:center;gap:8px;padding:11px 15px;border-bottom:1px solid var(--line)}
+  .phead .glow{width:7px;height:7px;border-radius:50%;background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
+  .phead h2{font-size:11px;letter-spacing:2px;margin:0;color:var(--dim);font-weight:600;text-transform:uppercase}
+  .phead .right{margin-left:auto;font-family:var(--mono);font-size:11px}
+  .pbody{padding:14px}
+  /* ---------- petri hero ---------- */
+  #petriWrap{position:relative;width:100%;aspect-ratio:1/1;background:
+    radial-gradient(circle at 50% 50%,#0b1220 0%,#070a10 75%);}
+  #petri{width:100%;height:100%;display:block;border-radius:0 0 16px 16px}
+  #tip{position:absolute;pointer-events:none;background:rgba(8,12,20,.96);
+    border:1px solid var(--cyan);border-radius:8px;padding:7px 10px;font-family:var(--mono);
+    font-size:11px;line-height:1.5;color:var(--ink);opacity:0;transition:opacity .08s;z-index:5;max-width:200px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;padding:10px 15px;font-size:10px;color:var(--dim);border-top:1px solid var(--line)}
+  .legend b{color:var(--ink);font-family:var(--mono)}
+  /* ---------- help tooltip ---------- */
+  .help{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;
+    border-radius:50%;border:1px solid var(--faint);color:var(--faint);font-size:9px;
+    margin-left:5px;cursor:help;position:relative;font-family:var(--sans);font-weight:700}
+  .help:hover{border-color:var(--cyan);color:var(--cyan)}
+  .htext{display:none}
+  #helptip{position:fixed;background:rgba(8,12,20,.98);border:1px solid var(--cyan);border-radius:8px;
+    padding:9px 11px;width:230px;font-size:11px;line-height:1.5;color:var(--dim);opacity:0;
+    pointer-events:none;transition:opacity .1s;z-index:9999;text-transform:none;letter-spacing:0;font-weight:400}
+  /* ---------- modes chart ---------- */
+  #modes{width:100%;height:190px;display:block}
+  .mlegend{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:11px}
+  .mlegend span{display:flex;align-items:center;gap:6px;color:var(--dim);cursor:default}
+  .mlegend i{width:11px;height:3px;border-radius:2px;display:inline-block}
+  .mlegend b{font-family:var(--mono);color:var(--ink);margin-left:2px}
+  /* ---------- falsification ---------- */
+  .verdict{margin-left:auto;font-family:var(--mono);font-size:12px;font-weight:700;padding:3px 10px;border-radius:6px}
+  .v-success{color:var(--green);background:rgba(57,217,138,.12)}
+  .v-failure{color:var(--red);background:rgba(255,84,112,.12)}
+  .v-unresolved{color:var(--amber);background:rgba(255,187,60,.12)}
+  .lamp{display:flex;align-items:center;gap:11px;padding:10px 4px;border-bottom:1px solid var(--line)}
+  .lamp:last-child{border-bottom:none}
+  .lamp .l{width:13px;height:13px;border-radius:50%;flex:none}
+  .l-on{background:var(--green);box-shadow:0 0 10px var(--green)}
+  .l-off{background:var(--red);box-shadow:0 0 10px var(--red)}
+  .l-na{background:var(--faint)}
+  .lamp .name{font-family:var(--mono);font-size:12px;color:var(--ink)}
+  .lamp .desc{font-size:10px;color:var(--faint);margin-top:1px}
+  /* ---------- gardener ---------- */
+  .hyp{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:12px}
+  .hyp .row{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+  .hyp .tag{font-size:9px;letter-spacing:1.5px;color:var(--faint)}
+  .hyp .live-dot{width:6px;height:6px;border-radius:50%;background:var(--amber);box-shadow:0 0 8px var(--amber);display:inline-block;margin-right:5px}
+  .hyp .big{font-family:var(--mono);font-size:14px;color:var(--ink)}
+  .hyp .arrow{color:var(--cyan)}
+  .hyp .why{font-size:11px;color:var(--dim);margin-top:5px;line-height:1.5}
+  .loopstep{display:flex;gap:8px;align-items:center;font-size:10px;color:var(--faint);margin:9px 0 3px;font-family:var(--mono)}
+  .loopstep .s{padding:2px 7px;border:1px solid var(--line);border-radius:20px}
+  .loopstep .s.act{border-color:var(--cyan);color:var(--cyan)}
+  .credit{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  .credit .cr{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px}
+  .credit .bar{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--blue),var(--cyan))}
+  .credit .kn{width:118px;color:var(--dim)}
+  .credit .vl{color:var(--faint);margin-left:auto}
+  .glog{max-height:210px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;margin-top:6px}
+  .glog::-webkit-scrollbar{width:6px}.glog::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
+  .ge{border-left:3px solid var(--line);background:var(--panel);border-radius:0 8px 8px 0;padding:8px 11px}
+  .ge.try{border-left-color:var(--blue)}.ge.keep{border-left-color:var(--green)}.ge.revert{border-left-color:var(--amber)}
+  .ge .a{font-family:var(--mono);font-size:12px;color:var(--ink)}
+  .ge .g{font-family:var(--mono);font-size:10px;color:var(--cyan);margin-right:6px}
+  .ge .r{font-size:10px;color:var(--faint);margin-top:3px}
+  /* ---------- research ---------- */
+  .research{display:flex;flex-direction:column;gap:0}
+  .ritem{border-bottom:1px solid var(--line)}
+  .ritem:last-child{border-bottom:none}
+  .ritem summary{cursor:pointer;padding:12px 4px;font-family:var(--mono);font-size:12px;color:var(--ink);
+    list-style:none;display:flex;align-items:center;gap:9px}
+  .ritem summary::-webkit-details-marker{display:none}
+  .ritem summary .chev{color:var(--faint);transition:transform .15s;font-size:10px}
+  .ritem[open] summary .chev{transform:rotate(90deg)}
+  .ritem summary .tk{font-size:9px;letter-spacing:1px;color:var(--faint);margin-left:auto;border:1px solid var(--line);padding:2px 7px;border-radius:20px}
+  .rbody{padding:2px 6px 14px 22px;font-size:12px;line-height:1.65;color:var(--dim)}
+  .rbody b{color:var(--ink)}
+  .rbody .cite{font-size:10px;color:var(--faint);margin-top:6px;font-style:italic}
+  /* ---------- responsive ---------- */
+  @media(max-width:1000px){
+    .grid{grid-template-columns:1fr}
+    .stats{width:100%;margin-left:0;order:3}
+    .ctrls{margin-left:auto}
+    #modes{height:160px}
+  }
+  @media(max-width:560px){
+    .wrap{padding:9px}
+    .logo h1{font-size:16px;letter-spacing:2px}
+    .stat{min-width:0;flex:1;padding:7px 8px}
+    .stat .v{font-size:18px}
+    header{padding:11px 12px;gap:10px}
+    .ctrls{gap:8px}
+    input[type=range]{width:80px}
+    .pbody{padding:11px}
+    .credit .kn{width:92px}
+  }
+</style>
+</head>
+<body>
+<div id="helptip"></div>
+<div class="wrap">
+  <header>
+    <div class="logo">
+      <div class="dot"></div>
+      <div><h1>PETRI<b>LAB</b></h1><div class="sub">ARTIFICIAL LIFE OBSERVATORY</div></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="v" id="s-gen">—</div><div class="k">GENERATION</div></div>
+      <div class="stat"><div class="v" id="s-cells">—</div><div class="k">CELLS</div></div>
+      <div class="stat"><div class="v" id="s-lin">—</div><div class="k">LINEAGES</div></div>
+      <div class="stat"><div class="v" id="s-exp">—</div><div class="k">EXPERIMENTS</div></div>
+    </div>
+    <div class="ctrls">
+      <button class="ctl" id="btnPause">❚❚ Pause</button>
+      <div class="speed"><span id="spdLbl">SPEED · —</span><input type="range" min="1" max="800" value="200" id="spd"></div>
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- LEFT: petri hero + research -->
+    <div class="col">
+      <div class="panel">
+        <div class="phead"><span class="glow"></span><h2>Petri dish · living cells</h2>
+          <span class="right" id="liveTag" style="color:var(--green)">● LIVE</span></div>
+        <div id="petriWrap">
+          <canvas id="petri"></canvas>
+          <div id="tip"></div>
+        </div>
+        <div class="legend">
+          <span>Colour = <b>lineage</b> (shared ancestor)</span>
+          <span>Size = <b>energy</b></span>
+          <span>Ring = <b>activation</b></span>
+          <span>Lines = <b>connections</b></span>
+          <span style="color:var(--faint)">hover a cell for detail</span>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="phead"><span class="glow" style="background:var(--violet);box-shadow:0 0 8px var(--violet)"></span>
+          <h2>Research foundation · the theory we lean on</h2></div>
+        <div class="pbody research" id="research"></div>
+      </div>
+    </div>
+
+    <!-- RIGHT: modes + falsification + gardener -->
+    <div class="col">
+      <div class="panel">
+        <div class="phead"><span class="glow"></span><h2>MODES · open-ended evolution axes</h2>
+          <span class="help">?<span class="htext">MODES (Dolson et al. 2019) measures open-ended evolution along four axes instead of one score. We watch them together to tell real accumulation from mere oscillation.</span></span></div>
+        <div class="pbody">
+          <canvas id="modes"></canvas>
+          <div class="mlegend" id="mlegend"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="phead"><span class="glow" style="background:var(--green);box-shadow:0 0 8px var(--green)"></span>
+          <h2>Falsification contract</h2>
+          <span class="help">?<span class="htext">Three independent tests that must ALL pass for us to claim open-ended evolution. Decoupled from the novelty metric so the system can't confirm its own definition.</span></span>
+          <span class="verdict v-unresolved" id="verdict">—</span></div>
+        <div class="pbody" id="falsi"></div>
+      </div>
+
+      <div class="panel">
+        <div class="phead"><span class="glow" style="background:var(--amber);box-shadow:0 0 8px var(--amber)"></span>
+          <h2>The Gardener · self-improving loop</h2>
+          <span class="help">?<span class="htext">An autonomous experimenter. It forms a hypothesis, tunes ONE ratio (never rules/DNA), measures the effect, keeps or reverts, and learns which knobs help — biasing future hypotheses toward them.</span></span></div>
+        <div class="pbody">
+          <div class="loopstep">
+            <span class="s" id="ls1">1 · HYPOTHESIS</span><span>→</span>
+            <span class="s" id="ls2">2 · TEST</span><span>→</span>
+            <span class="s" id="ls3">3 · MEASURE</span><span>→</span>
+            <span class="s" id="ls4">4 · LEARN</span>
+          </div>
+          <div class="hyp" id="hyp"></div>
+          <div style="font-size:9px;letter-spacing:1.5px;color:var(--faint);margin:4px 0 2px">LEARNED KNOB CREDIT (what has helped)</div>
+          <div class="credit" id="credit"></div>
+          <div style="font-size:9px;letter-spacing:1.5px;color:var(--faint);margin:14px 0 2px">EXPERIMENT LOG</div>
+          <div class="glog" id="glog"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const fmt=(v,d=0)=>(v==null||Number.isNaN(v))?'—':(typeof v==='number'?v.toFixed(d):v);
+const MODES=[
+  {k:'change',c:'#3f7bff',label:'Change',help:'Turnover of the lineage mix since last sample.'},
+  {k:'novelty',c:'#22e3c4',label:'Novelty',help:'Rate of genuinely new macro-states (sliding window, so it tracks dynamics — not library size).'},
+  {k:'ecology',c:'#39d98a',label:'Ecology',help:'Evenness/diversity of coexisting lineages (niches).'},
+  {k:'complexity',c:'#a56bff',label:'Complexity',help:'Mean genome depth blended with connectivity.'},
+];
+
+// ---- lineage colour: stable hue from lineage id ----
+const linColor=(lin,a)=>{
+  const h=(lin*47)%360;
+  const light=42+((a+1)/2)*26;         // activation modulates lightness
+  return `hsl(${h},70%,${light}%)`;
+};
+
+// ---------- research content ----------
+const RESEARCH=[
+  {t:'Open-Ended Evolution (OEE)',tag:'GOAL',b:`The north star: a system that keeps producing genuinely new, more complex forms indefinitely — like biology, never settling. Most artificial systems plateau or loop. PetriLab's whole job is to <b>escape the plateau</b> and prove it did.`,c:'Taylor, Bedau et al. — "Open-Ended Evolution: Perspectives from the OEE Workshops" (2016)'},
+  {t:'MODES toolbox',tag:'MEASURE',b:`Instead of one fitness number, MODES watches four signals over <b>persistent lineages</b>: change, novelty, ecology, complexity. Built for interacting populations — which is exactly what we have. This replaced our old single novelty metric (which mechanically decayed to zero).`,c:'Dolson, Vostinar, Wiser, Ofria — "The MODES Toolbox" (Artificial Life, 2019)'},
+  {t:'Edge of chaos',tag:'REGIME',b:`Complexity lives in a narrow band between frozen order and pure noise. Too ordered → periodic loops (the trap our old system fell into). Too chaotic → random mush. The Gardener's job is to keep the dish <b>near this fertile edge</b>.`,c:'Langton (1990) · Wolfram class-4 cellular automata · Kauffman'},
+  {t:'Novelty Search',tag:'METHOD',b:`Counter-intuitive result: rewarding <b>novelty itself</b> — not progress toward a goal — often produces richer evolution than optimising a fitness target, because it avoids deceptive dead-ends. PetriLab has no goal by design; it rewards being new.`,c:'Lehman & Stanley — "Abandoning Objectives: Evolution Through the Search for Novelty Alone" (2011)'},
+  {t:'Heredity with variation',tag:'ENGINE',b:`Daughters inherit the mother's genome and connection pattern <b>with mutation</b> — so good structure accumulates instead of being lost each generation. Mutation is raw material, not noise: turn it off and the system runs dry when the environment shifts.`,c:'Miller — biosim4 evolved creatures · Karl Sims (1994)'},
+  {t:'The Gardener (our method)',tag:'OURS',b:`A closed-loop experimenter at "level B": it only tunes <b>ratios</b> (energy, mutation, seasons, signalling), never the rules or DNA. It forms a hypothesis, tests one change, measures the four MODES axes, keeps or reverts, and remembers which knobs paid off — so its future hypotheses get smarter. <b>Roadmap:</b> let it search the web to validate ideas and design richer experiments.`,c:'PetriLab original — inspired by automated-science / self-driving-lab loops'},
+];
+function renderResearch(){
+  $('research').innerHTML=RESEARCH.map(r=>`
+    <details class="ritem"><summary><span class="chev">▶</span>${r.t}<span class="tk">${r.tag}</span></summary>
+    <div class="rbody">${r.b}<div class="cite">${r.c}</div></div></details>`).join('');
+}
+
+// ---------- petri rendering + hover ----------
+let last=null, hover=null, mouse={x:-1,y:-1};
+const petri=$('petri'), pctx=petri.getContext('2d');
+function sizeCanvas(cv){
+  const r=cv.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
+  cv.width=r.width*dpr; cv.height=r.height*dpr;
+  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  return {w:r.width,h:r.height};
+}
+function drawPetri(){
+  if(!last){return;}
+  const {w,h}=sizeCanvas(petri);
+  pctx.clearRect(0,0,w,h);
+  const nodes=last.nodes||[], edges=last.edges||[];
+  // auto-fit: map the cells' bounding box into the square with padding
+  const pad=28;
+  let minx=1,maxx=0,miny=1,maxy=0;
+  nodes.forEach(n=>{minx=Math.min(minx,n.x);maxx=Math.max(maxx,n.x);miny=Math.min(miny,n.y);maxy=Math.max(maxy,n.y);});
+  const spanx=Math.max(maxx-minx,.12), spany=Math.max(maxy-miny,.12);
+  const span=Math.max(spanx,spany); // keep aspect square so tissue shape is honest
+  const cx=(minx+maxx)/2, cy=(miny+maxy)/2;
+  const S=Math.min(w,h)-2*pad;
+  const X=x=>w/2+((x-cx)/span)*S;
+  const Y=y=>h/2+((y-cy)/span)*S;
+  const pos={};
+  nodes.forEach(n=>pos[n.id]=[X(n.x),Y(n.y)]);
+  // edges
+  pctx.lineWidth=.6;
+  edges.forEach(e=>{
+    const a=pos[e.s],b=pos[e.d]; if(!a||!b)return;
+    pctx.strokeStyle='rgba(90,130,200,'+Math.min(.5,Math.abs(e.w)*.28)+')';
+    pctx.beginPath();pctx.moveTo(a[0],a[1]);pctx.lineTo(b[0],b[1]);pctx.stroke();
+  });
+  // cells
+  let best=null,bd=1e9;
+  nodes.forEach(n=>{
+    const p=pos[n.id], r=3+Math.sqrt(Math.max(n.e,0))*1.6;
+    const col=linColor(n.lin,n.a);
+    pctx.beginPath();pctx.arc(p[0],p[1],r,0,7);
+    pctx.fillStyle=col;pctx.shadowColor=col;pctx.shadowBlur=10;pctx.fill();pctx.shadowBlur=0;
+    // activation ring
+    pctx.lineWidth=1.4;pctx.strokeStyle='rgba(255,255,255,'+Math.abs(n.a)*.5+')';
+    pctx.beginPath();pctx.arc(p[0],p[1],r+1.5,0,7);pctx.stroke();
+    if(mouse.x>=0){const d=(p[0]-mouse.x)**2+(p[1]-mouse.y)**2;if(d<bd&&d<400){bd=d;best=n;}}
+  });
+  hover=best;
+  const tip=$('tip');
+  if(best){const p=pos[best.id];
+    tip.style.opacity=1;
+    tip.style.left=Math.min(p[0]+14,w-190)+'px';tip.style.top=Math.max(p[1]-10,4)+'px';
+    tip.innerHTML=`<b style="color:${linColor(best.lin,best.a)}">cell #${best.id}</b><br>
+      lineage: ${best.lin}<br>energy: ${fmt(best.e,1)}<br>activation: ${fmt(best.a,2)}<br>genome: ${best.g} genes`;
+  } else tip.style.opacity=0;
+}
+petri.addEventListener('mousemove',e=>{const r=petri.getBoundingClientRect();mouse.x=e.clientX-r.left;mouse.y=e.clientY-r.top;drawPetri();});
+petri.addEventListener('mouseleave',()=>{mouse.x=-1;mouse.y=-1;$('tip').style.opacity=0;});
+
+// ---------- modes chart ----------
+const mc=$('modes'), mctx=mc.getContext('2d');
+function drawModes(){
+  const {w,h}=sizeCanvas(mc);
+  mctx.clearRect(0,0,w,h);
+  const hist=(last&&last.modes_history)||[];
+  const pad={l:34,r:8,t:10,b:18};
+  // grid
+  mctx.strokeStyle='rgba(90,110,150,.12)';mctx.lineWidth=1;
+  for(let i=0;i<=4;i++){const y=pad.t+(h-pad.t-pad.b)*i/4;
+    mctx.beginPath();mctx.moveTo(pad.l,y);mctx.lineTo(w-pad.r,y);mctx.stroke();
+    mctx.fillStyle='#5b6f92';mctx.font='9px monospace';mctx.fillText((1-i/4).toFixed(2),4,y+3);}
+  if(hist.length<2){mctx.fillStyle='#5b6f92';mctx.font='11px sans-serif';mctx.fillText('collecting data…',pad.l+10,h/2);return;}
+  // normalise complexity to 0-1 for shared axis (divide by running max)
+  let cmax=1;hist.forEach(p=>cmax=Math.max(cmax,p.complexity||0));
+  const N=hist.length;
+  const xAt=i=>pad.l+(w-pad.l-pad.r)*i/(N-1);
+  const yAt=v=>pad.t+(h-pad.t-pad.b)*(1-Math.max(0,Math.min(1,v)));
+  MODES.forEach(m=>{
+    mctx.strokeStyle=m.c;mctx.lineWidth=1.8;mctx.beginPath();
+    hist.forEach((p,i)=>{let v=p[m.k]||0;if(m.k==='complexity')v=v/cmax;
+      const x=xAt(i),y=yAt(v);i?mctx.lineTo(x,y):mctx.moveTo(x,y);});
+    mctx.stroke();
+    // glowing end point
+    const lp=hist[N-1];let lv=lp[m.k]||0;if(m.k==='complexity')lv=lv/cmax;
+    mctx.fillStyle=m.c;mctx.shadowColor=m.c;mctx.shadowBlur=8;
+    mctx.beginPath();mctx.arc(xAt(N-1),yAt(lv),3,0,7);mctx.fill();mctx.shadowBlur=0;
+  });
+}
+function renderMlegend(){
+  const m=(last&&last.modes)||{};
+  $('mlegend').innerHTML=MODES.map(x=>`<span title="${x.help}"><i style="background:${x.c}"></i>${x.label}
+    <b>${x.k==='complexity'?fmt(m[x.k],1):fmt(m[x.k],3)}</b>
+    <span class="help" style="margin-left:3px">?<span class="htext">${x.help}</span></span></span>`).join('');
+}
+
+// ---------- falsification ----------
+const LAMPS=[
+  {k:'lineage_survival',n:'lineage_survival',d:'≥3 lineages persisting long-term (not collapsed to one).'},
+  {k:'novelty_alive',n:'novelty_alive',d:'Still minting new macro-states (novelty > 0.05).'},
+  {k:'not_periodic',n:'not_periodic',d:'Novelty is NOT a clean oscillation — escapes the class-2 season trap.'},
+];
+function renderFalsi(){
+  const f=(last&&last.falsification)||{};
+  const v=f.verdict||'unresolved';
+  const vb=$('verdict');vb.textContent=v.toUpperCase();vb.className='verdict v-'+v;
+  $('falsi').innerHTML=LAMPS.map(l=>{
+    const s=f[l.k];const cls=s===true?'l-on':s===false?'l-off':'l-na';
+    return `<div class="lamp"><span class="l ${cls}"></span>
+      <div><div class="name">${l.n} ${s===true?'✓':s===false?'✗':'—'}</div><div class="desc">${l.d}</div></div></div>`;}).join('');
+}
+
+// ---------- gardener ----------
+function renderGardener(){
+  const g=(last&&last.gardener)||{};
+  // loop step highlight — follow the real phase
+  const phase=g.phase||'idle';
+  const map={idle:'ls1',test:'ls2',measure:'ls3',learn:'ls4'};
+  ['ls1','ls2','ls3','ls4'].forEach(id=>$(id).classList.remove('act'));
+  $(map[phase]||'ls1').classList.add('act');
+  // hypothesis card
+  const h=g.hypothesis, lo=g.last_outcome;
+  if(h){
+    $('hyp').innerHTML=`<div class="row"><span class="tag"><span class="live-dot"></span>ACTIVE HYPOTHESIS · TESTING</span>
+      <span class="tag">baseline ${fmt(h.baseline_score,3)}</span></div>
+      <div class="big">${h.knob} : ${fmt(h.from,3)} <span class="arrow">→</span> ${fmt(h.to,3)}</div>
+      <div class="why">Nudged one ratio. Measuring the four MODES axes for a full evaluation window, then it will keep or revert based on the change in score.</div>`;
+  }else if(lo){
+    const kept=lo.action.startsWith('KEEP');
+    $('hyp').innerHTML=`<div class="row"><span class="tag">LAST OUTCOME · ${kept?'LEARNED (kept)':'REVERTED'}</span>
+      <span class="tag">score ${fmt(g.current_score,3)}</span></div>
+      <div class="big" style="color:${kept?'var(--green)':'var(--amber)'}">${lo.action}</div>
+      <div class="why">${lo.reason}. Idle — will form the next hypothesis shortly, biased toward knobs that have paid off.</div>`;
+  }else{$('hyp').innerHTML=`<div class="why">Warming up — first hypothesis forming…</div>`;}
+  // credit bars
+  const cr=(g.knob_credit||[]).slice(0,7);
+  const mx=Math.max(1,...cr.map(c=>c.credit));
+  $('credit').innerHTML=cr.map(c=>`<div class="cr"><span class="kn">${c.knob}</span>
+    <span class="bar" style="width:${8+ (c.credit/mx)*120}px"></span>
+    <span class="vl">${fmt(c.value,2)} · ×${fmt(c.credit,2)}</span></div>`).join('');
+  // log
+  const log=(last&&last.gardener_log)||[];
+  $('glog').innerHTML=log.slice().reverse().map(e=>{
+    const cls=e.action.startsWith('TRY')?'try':e.action.startsWith('KEEP')?'keep':'revert';
+    return `<div class="ge ${cls}"><div class="a"><span class="g">GEN ${e.gen}</span>${e.action}</div>
+      <div class="r">${e.reason}</div></div>`;}).join('');
+}
+
+// ---------- controls ----------
+$('btnPause').onclick=async()=>{try{const r=await fetch('api/toggle',{method:'POST'});const j=await r.json();
+  $('btnPause').textContent=j.running?'❚❚ Pause':'▶ Resume';}catch(e){}};
+$('spd').oninput=async e=>{$('spdLbl').textContent='SPEED · '+e.target.value;
+  try{await fetch('api/speed/'+e.target.value,{method:'POST'});}catch(err){}};
+
+// ---------- main loop ----------
+async function tick(){
+  try{
+    const r=await fetch('api/state',{cache:'no-store'});
+    last=await r.json();
+    $('liveTag').style.color='var(--green)';$('liveTag').textContent='● LIVE';
+    $('s-gen').textContent=fmt(last.generation);
+    $('s-cells').textContent=fmt(last.cell_count);
+    $('s-lin').textContent=fmt(last.lineage_count);
+    $('s-exp').textContent=fmt((last.gardener||{}).experiments_run);
+    if(document.activeElement!==$('spd')){$('spd').value=last.speed;$('spdLbl').textContent='SPEED · '+last.speed;}
+    $('btnPause').textContent=last.running?'❚❚ Pause':'▶ Resume';
+    drawPetri();drawModes();renderMlegend();renderFalsi();renderGardener();
+  }catch(e){$('liveTag').style.color='var(--red)';$('liveTag').textContent='● OFFLINE';}
+}
+renderResearch();
+// ---- shared help tooltip (escapes overflow:hidden via fixed positioning) ----
+(function(){
+  const tip=$('helptip');
+  document.body.addEventListener('mouseover',e=>{
+    const h=e.target.closest('.help'); if(!h)return;
+    const txt=h.getAttribute('data-help')|| (h.querySelector('.htext')&&h.querySelector('.htext').textContent);
+    if(!txt)return;
+    tip.textContent=txt;tip.style.opacity=1;
+    const r=h.getBoundingClientRect();
+    let left=r.left+r.width/2-115; left=Math.max(8,Math.min(left,window.innerWidth-238));
+    let top=r.top-tip.offsetHeight-8;
+    tip.style.left=left+'px';
+    tip.style.top=(top<8? r.bottom+8 : top)+'px';
+  });
+  document.body.addEventListener('mouseout',e=>{if(e.target.closest('.help'))tip.style.opacity=0;});
+})();
+setInterval(tick,1000);tick();
+window.addEventListener('resize',()=>{drawPetri();drawModes();});
+</script>
+</body>
+</html>
