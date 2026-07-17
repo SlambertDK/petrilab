@@ -108,7 +108,8 @@ Reproduce a confirmed finding from the command line:
 | `metrics.py` | Emergence metrics: complexity, modularity, cycles, depth, persistence, spatial coherence, communication. |
 | `experiment.py` | Controlled experiment harness: run one condition vs. control across seeds, aggregate, judge. |
 | `research.py` | The research module: propose / test / register hypotheses → findings log. |
-| `server.py` | FastAPI live dashboard with auto-zoom network view + responsive UI. |
+| `v2/server.py` + `v2/dashboard.html` | The live **Observatory** dashboard that `./run.sh` starts: petri view, MODES axes, falsification contract, and the Gardener loop. Fully responsive. |
+| `server.py` | Legacy v1 dashboard (emergence-metric grid + trend graph). Kept for reference. |
 
 See [`docs/RESEARCH.md`](docs/RESEARCH.md) for the full research design and
 [`docs/GARDENER.md`](docs/GARDENER.md) for the auto-research how-to.

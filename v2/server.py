@@ -120,7 +120,8 @@ def main():
     os.makedirs(os.path.join(HERE, "data"), exist_ok=True)
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
-    uvicorn.run(app, host="0.0.0.0", port=8771, log_level="warning")
+    port = int(os.environ.get("PETRILAB_PORT", "8770"))
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 
 
 if __name__ == "__main__":
