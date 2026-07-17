@@ -55,6 +55,14 @@ class Node:
     # PHASE 3: signal genes. Evolution discovers their use on its own.
     emit: float = 0.0        # how much signaling molecule the cell secretes (scaled by activation)
     sensitivity: float = 0.0  # how strongly the cell responds to surrounding signal
+    # PHASE 4 (open_genotype): an OPTIONAL variable-length genome. When the
+    # open_genotype flag is OFF this stays None and the cell behaves exactly as
+    # before (fixed 3-scalar genotype = the control). When ON, the genome is a
+    # list of "genes" (each a small float triple) whose LENGTH can grow via gene
+    # duplication at division — removing the a-priori complexity ceiling. The
+    # cell's effective bias is derived from the genome so a longer genome can
+    # encode strictly more structure than a shorter one.
+    genome: list = None
 
 
 @dataclass
@@ -110,6 +118,14 @@ class Petri:
         # is used for is NOT predetermined; evolution discovers the use on its own.
         self.signaling    = float(p.get("signaling", 0.0))     # strength of the signal coupling
         self.signal_radius = float(p.get("signal_radius", 0.2))  # how far the signal reaches
+        # PHASE 4: open genotype. 0=OFF (control: fixed 3-scalar cell = complexity
+        # ceiling). >0=ON: cells carry a variable-length genome that can GROW via
+        # gene duplication at division, removing the a-priori ceiling. The value
+        # is the per-division probability of a length-changing mutation
+        # (duplicate / insert / delete a gene). This is the one mechanism that
+        # attacks the ceiling itself rather than unfolding more of a closed space.
+        self.open_genotype = float(p.get("open_genotype", 0.0))
+        self.genome_cap    = int(p.get("genome_cap", 200))  # hard safety limit on genome length
         self.last_event = None  # for dashboard/log
 
         # --- State ---
@@ -133,9 +149,54 @@ class Petri:
                 energy=self.rng.uniform(4, 8),
             )
 
+    def _new_genome(self):
+        """A fresh minimal genome: one gene = a (weight, offset, scale) triple."""
+        return [[self.rng.gauss(0, 0.5), self.rng.gauss(0, 0.3), self.rng.gauss(0, 0.3)]]
+
+    def _genome_bias(self, genome):
+        """Derive the cell's effective bias from its genome. A longer genome can
+        encode strictly more structure: bias is a bounded sum of per-gene
+        contributions, so added genes add expressive capacity."""
+        if not genome:
+            return 0.0
+        s = sum(g[0] * math.tanh(g[1] + g[2]) for g in genome)
+        return math.tanh(s)  # bounded, but the internal structure is unbounded
+
+    def _mutate_genome(self, genome):
+        """Copy a genome with mutation. With open_genotype ON this can CHANGE
+        LENGTH — duplicate a gene (the historical engine of biological complexity
+        growth), insert a fresh gene, or delete one. Point-mutates values too."""
+        g = [list(gene) for gene in genome]  # deep copy
+        # point mutation on every gene value
+        for gene in g:
+            for i in range(len(gene)):
+                if self.rng.random() < 0.3:
+                    gene[i] += self.rng.gauss(0, 0.1)
+        # length-changing mutation, gated by open_genotype probability
+        if self.rng.random() < self.open_genotype:
+            roll = self.rng.random()
+            if roll < 0.5 and len(g) < self.genome_cap:      # DUPLICATE a gene
+                idx = self.rng.randrange(len(g))
+                g.insert(idx, list(g[idx]))
+            elif roll < 0.8 and len(g) < self.genome_cap:    # INSERT a fresh gene
+                g.append([self.rng.gauss(0, 0.5), self.rng.gauss(0, 0.3), self.rng.gauss(0, 0.3)])
+            elif len(g) > 1:                                  # DELETE a gene
+                del g[self.rng.randrange(len(g))]
+        return g
+
     def _spawn_node(self, x, y, energy, parent_bias=None, parent=None):
+        # PHASE 4: open genotype path. When ON, the daughter inherits a mutated,
+        # possibly-longer genome and derives its bias from it. This removes the
+        # fixed-scalar complexity ceiling.
+        genome = None
+        if self.open_genotype > 0:
+            if parent is not None and parent.genome:
+                genome = self._mutate_genome(parent.genome)
+            else:
+                genome = self._new_genome()
+            bias = self._genome_bias(genome)
         # PHASE 2: if heredity is ON and there is a mother, inherit bias + small mutation.
-        if parent_bias is not None and self.heredity > 0:
+        elif parent_bias is not None and self.heredity > 0:
             bias = parent_bias + self.rng.gauss(0, 0.1)
         else:
             bias = self.rng.gauss(0, 0.5)
@@ -155,6 +216,7 @@ class Petri:
             bias=bias,
             emit=emit,
             sensitivity=sens,
+            genome=genome,
         )
         self.nodes[n.id] = n
         self.next_id += 1

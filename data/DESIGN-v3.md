@@ -62,3 +62,9 @@ Derfor tre ben, i denne orden:
 
 ## Rækkefølge-resumé
 BEN 1 (nyheds-metrik) → verificér den afslører sæson-artefakten → BEN 2 (åben genotype) målt med ben 1 → BEN 3 løbende. Én mekanisme ad gangen, feature-flag default OFF, A/B mod kontrol, ærlig dom. Præcis projektets egen metode — nu vendt mod projektets eget blinde punkt.
+
+## STATUS 2026-07-17 — hvad der er bygget og hvad vi lærte
+- **BEN 1 (novelty-metrik): BYGGET + VIRKER.** Afslørede at ~halvdelen af sæson-effekten var oscillation (innovation +110% men novelty kun +48%). Metrikken kan nu skelne spiral fra cirkel.
+- **BEN 3 (20 seeds + 95% CI-port): BYGGET + VIRKER.** "confirmed" kræver nu at bootstrap-CI'en på forskellen udelukker nul. H0015 verificeret CI[2.47–3.32].
+- **BEN 2 (åben genotype): BYGGET, NEGATIVT FUND.** Genom-længden vokser (loft brudt strukturelt), men novelty rykkede sig ikke (0.278 vs 0.284). **Ny indsigt:** længde-loft ≠ ekspressivitets-loft. Hele genomet styrer kun ÉN bias-skalar → kollapser til ét tal uanset længde. NÆSTE ITERATION af ben 2: lad ekstra gener låse op for NYE frihedsgrader i fænotypen (flere output-kanaler / ny opførsel), ikke bare finjustere samme skalar. Det er den egentlige vej til at fjerne loftet — ikke bare flytte det.
+
