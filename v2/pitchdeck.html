@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PetriLab — Pitch Deck</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#111823; --line:#1e2a3a; --ink:#e6edf5; --dim:#8fa3ba;
+    --faint:#5a6b80; --cyan:#38e0d0; --green:#4ade80; --amber:#fbbf24; --violet:#a78bfa;
+    --red:#f87171; --sans:'Inter',system-ui,-apple-system,sans-serif; --mono:'JetBrains Mono',monospace;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);overflow:hidden}
+  #deck{height:100vh;width:100vw;position:relative}
+  .slide{position:absolute;inset:0;display:none;flex-direction:column;justify-content:center;
+    padding:6vh 8vw;opacity:0;transition:opacity .4s}
+  .slide.active{display:flex;opacity:1}
+  .kicker{font-family:var(--mono);font-size:13px;letter-spacing:3px;text-transform:uppercase;
+    color:var(--cyan);margin-bottom:18px}
+  h1{font-size:clamp(34px,6vw,68px);line-height:1.05;font-weight:800;letter-spacing:-1.5px;margin-bottom:22px}
+  h2{font-size:clamp(26px,3.6vw,44px);line-height:1.1;font-weight:700;letter-spacing:-1px;margin-bottom:28px}
+  h2 .accent{color:var(--cyan)}
+  p.lead{font-size:clamp(16px,2vw,24px);line-height:1.5;color:var(--dim);max-width:900px}
+  ul{list-style:none;display:flex;flex-direction:column;gap:16px;margin-top:10px}
+  li{font-size:clamp(15px,1.7vw,21px);line-height:1.45;padding-left:26px;position:relative;color:var(--ink);max-width:960px}
+  li::before{content:'';position:absolute;left:0;top:.55em;width:9px;height:9px;border-radius:50%;
+    background:var(--cyan);box-shadow:0 0 10px var(--cyan)}
+  li b{color:#fff}
+  li .sub{display:block;color:var(--dim);font-size:.85em;margin-top:3px}
+  .grid{display:grid;gap:20px;margin-top:12px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px 24px}
+  .card h3{font-size:clamp(16px,1.8vw,22px);margin-bottom:10px;font-weight:700}
+  .card p{font-size:clamp(13px,1.4vw,17px);line-height:1.45;color:var(--dim)}
+  .card .big{font-family:var(--mono);font-size:clamp(30px,4vw,52px);font-weight:700;line-height:1;margin-bottom:8px}
+  .cyan{color:var(--cyan)} .green{color:var(--green)} .amber{color:var(--amber)}
+  .violet{color:var(--violet)} .red{color:var(--red)}
+  table{border-collapse:collapse;margin-top:16px;font-size:clamp(12px,1.4vw,18px);width:100%;max-width:1000px}
+  th,td{text-align:left;padding:12px 16px;border-bottom:1px solid var(--line)}
+  th{color:var(--faint);font-family:var(--mono);font-size:.8em;text-transform:uppercase;letter-spacing:1px;font-weight:600}
+  td.frug{color:var(--green);font-weight:600}
+  .quote{font-size:clamp(22px,3.2vw,40px);line-height:1.3;font-weight:600;max-width:1000px;letter-spacing:-.5px}
+  .quote .accent{color:var(--cyan)}
+  .foot{position:absolute;bottom:3.5vh;left:8vw;right:8vw;display:flex;justify-content:space-between;
+    align-items:center;font-family:var(--mono);font-size:12px;color:var(--faint);letter-spacing:1px}
+  .progress{position:fixed;top:0;left:0;height:3px;background:var(--cyan);transition:width .3s;z-index:10;box-shadow:0 0 8px var(--cyan)}
+  .hint{position:fixed;bottom:14px;right:18px;font-family:var(--mono);font-size:11px;color:var(--faint);opacity:.6}
+  .logo{font-family:var(--mono);font-weight:700;letter-spacing:1px}
+  .logo .dot{color:var(--cyan)}
+  .tag{display:inline-block;font-family:var(--mono);font-size:12px;padding:4px 12px;border:1px solid var(--line);
+    border-radius:20px;color:var(--dim);margin-right:8px;margin-bottom:8px}
+  .big-num{font-family:var(--mono);font-weight:800;font-size:clamp(50px,9vw,120px);line-height:1;
+    letter-spacing:-3px;background:linear-gradient(135deg,var(--cyan),var(--violet));
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+</style>
+</head>
+<body>
+<div class="progress" id="prog"></div>
+<div id="deck">
+
+  <!-- 1 · TITLE -->
+  <section class="slide active">
+    <div class="kicker">Energinet · Product Jam</div>
+    <h1>PetriLab</h1>
+    <p class="lead">A living laboratory for <span class="cyan">open-ended evolution</span> — a digital petri dish where complexity is grown, measured, and kept honest. Built to explore one of the hardest open questions in AI: how do you make a system that never stops inventing?</p>
+    <div style="margin-top:34px">
+      <span class="tag">Artificial Life</span>
+      <span class="tag">Emergence</span>
+      <span class="tag">Autonomous experimentation</span>
+      <span class="tag">Live &amp; measurable</span>
+    </div>
+    <div class="foot"><span class="logo">Petri<span class="dot">·</span>Lab</span><span>Henrik Lambert</span></div>
+  </section>
+
+  <!-- 2 · THE DREAM -->
+  <section class="slide">
+    <div class="kicker">The dream</div>
+    <h2>What if a system could keep <span class="accent">surprising us — forever?</span></h2>
+    <p class="lead">Nature never converged. Four billion years in, it is still inventing new forms. Almost every system we build does the opposite: it optimises, plateaus, and stops. PetriLab is a sandbox to chase the exception — <b>open-ended evolution</b>: novelty that accumulates instead of settling.</p>
+    <ul style="margin-top:26px">
+      <li><b>Not</b> "find the best solution." <span class="sub">That's optimisation — it ends.</span></li>
+      <li><b>Instead</b> "never stop finding genuinely new ones." <span class="sub">That's open-endedness — the frontier.</span></li>
+    </ul>
+  </section>
+
+  <!-- 3 · WHY IT MATTERS -->
+  <section class="slide">
+    <div class="kicker">Why it matters</div>
+    <h2>The same question sits under <span class="accent">the AI we actually build</span></h2>
+    <div class="grid g3">
+      <div class="card"><h3 class="cyan">Creativity that lasts</h3><p>Models that plateau are a business problem. Understanding what keeps a system generative is directly useful for how we deploy AI.</p></div>
+      <div class="card"><h3 class="violet">Emergence, made visible</h3><p>Complex behaviour from simple rules — the core mystery of modern AI. PetriLab lets you watch it happen and measure it.</p></div>
+      <div class="card"><h3 class="green">A safe place to be wrong</h3><p>A sandbox where a failed hypothesis costs nothing and teaches everything. Innovation practice, not innovation theatre.</p></div>
+    </div>
+  </section>
+
+  <!-- 4 · WHAT IT IS -->
+  <section class="slide">
+    <div class="kicker">What it is</div>
+    <h2>A dish full of tiny organisms — <span class="accent">alive on screen</span></h2>
+    <p class="lead">Hundreds of cells with heritable genomes. They divide, mutate, wire up into tissue, signal each other, and compete for energy through changing seasons. No cell is designed. Everything you see <b>emerged</b> from local rules.</p>
+    <div class="grid g2" style="margin-top:26px">
+      <div class="card"><h3>Open genome</h3><p>Variable-length genetic code that can grow, duplicate and shed genes. The space of possible organisms is unbounded.</p></div>
+      <div class="card"><h3>Lineages</h3><p>Every cell remembers its ancestry. We can watch family lines rise, compete, and die — the raw material of evolution.</p></div>
+    </div>
+  </section>
+
+  <!-- 5 · THE GARDENER -->
+  <section class="slide">
+    <div class="kicker">The gardener</div>
+    <h2>An <span class="accent">autonomous experimenter</span> tends the dish</h2>
+    <p class="lead">PetriLab runs itself. A "gardener" agent watches the ecosystem and runs its own experiments — a visible, self-improving loop:</p>
+    <div class="grid g3" style="margin-top:22px">
+      <div class="card"><div class="big cyan">1 → 2</div><h3>Hypothesis → Test</h3><p>Forms an idea, then tunes exactly one environmental ratio. Never the rules, never the DNA.</p></div>
+      <div class="card"><div class="big amber">3</div><h3>Measure</h3><p>Watches what the change did to the ecosystem's health over time.</p></div>
+      <div class="card"><div class="big green">4</div><h3>Learn</h3><p>Keeps what helped, reverts what didn't — and biases future experiments toward knobs that work.</p></div>
+    </div>
+    <p class="lead" style="margin-top:24px;font-size:16px">The long-term vision: the gardener searches the web to validate its own ideas and design richer experiments.</p>
+  </section>
+
+  <!-- 6 · RESEARCH FOUNDATION -->
+  <section class="slide">
+    <div class="kicker">Research foundation</div>
+    <h2>Standing on <span class="accent">real science</span>, not vibes</h2>
+    <p class="lead">Four independent fields describe the same phenomenon — the <b>"edge of chaos,"</b> the narrow band between frozen order and pure noise where complexity lives.</p>
+    <table>
+      <tr><th>Field</th><th>Ordered (dead)</th><th>Fertile (the edge)</th><th>Chaotic (noise)</th></tr>
+      <tr><td>Wolfram CA</td><td>Class 1–2</td><td class="frug">Class 4 — complex</td><td>Class 3</td></tr>
+      <tr><td>Langton's λ</td><td>λ low</td><td class="frug">λ critical</td><td>λ high</td></tr>
+      <tr><td>Annealing</td><td>Frozen</td><td class="frug">≈ critical temp</td><td>Molten</td></tr>
+      <tr><td>Bak (SOC)</td><td>Subcritical</td><td class="frug">Power-law cascades</td><td>Supercritical</td></tr>
+    </table>
+    <p class="lead" style="margin-top:20px;font-size:15px">Grounded in Lehman &amp; Stanley (Novelty Search), Mouret &amp; Clune (MAP-Elites), Wolfram, Bak, and the ALife/OEE literature.</p>
+  </section>
+
+  <!-- 7 · WHAT WE PROVE -->
+  <section class="slide">
+    <div class="kicker">What we prove</div>
+    <h2>We refuse to <span class="accent">fool ourselves</span></h2>
+    <p class="lead">The easiest trap in this field is measuring success by your own definition. PetriLab ships with a <b>falsification contract</b>: three independent tests, decoupled from the novelty metric, that must <i>all</i> pass before we claim open-ended evolution.</p>
+    <div class="grid g3" style="margin-top:22px">
+      <div class="card"><h3 class="green">Lineage survival</h3><p>Do multiple family lines persist — or does one take over? (Monoculture = failure.)</p></div>
+      <div class="card"><h3 class="cyan">Novelty alive</h3><p>Is the system still minting genuinely new macro-states?</p></div>
+      <div class="card"><h3 class="violet">Not periodic</h3><p>Is that novelty real accumulation — not a seasonal cycle in disguise?</p></div>
+    </div>
+  </section>
+
+  <!-- 8 · THE STORY / EVIDENCE -->
+  <section class="slide">
+    <div class="kicker">Evidence · a real result</div>
+    <h2>The dish <span class="accent">collapsed — and told us so</span></h2>
+    <p class="lead">Left running, PetriLab evolved toward <b>monoculture</b>: after 800,000 generations, one lineage had out-competed all others. Novelty, change and ecology all fell to zero. The falsification contract flipped to <span class="red">FAILURE</span> — exactly as it should.</p>
+    <div class="grid g3" style="margin-top:20px">
+      <div class="card"><div class="big red">1</div><p>lineage left, down from 24. Diversity dead.</p></div>
+      <div class="card"><div class="big amber">0.00</div><p>novelty, change, ecology. Nothing new happening.</p></div>
+      <div class="card"><div class="big green">6+</div><p>lineages held after the fix — verified across 40,000 generations.</p></div>
+    </div>
+    <p class="lead" style="margin-top:20px;font-size:16px">The fix — <b>immigration</b>: inject fresh lineages when diversity collapses. Raw material only; selection untouched. <span class="green">Verdict back to success.</span></p>
+  </section>
+
+  <!-- 9 · THE LESSON -->
+  <section class="slide" style="align-items:flex-start">
+    <div class="kicker">The lesson</div>
+    <p class="quote">Build the <span class="accent">measuring instrument</span> before the experiment — so the system can prove itself wrong, instead of quietly confirming what you hoped for.</p>
+    <p class="lead" style="margin-top:28px">That discipline is the transferable product lesson: honest metrics that can fail are worth more than dashboards that always look green.</p>
+  </section>
+
+  <!-- 10 · LIVE DEMO -->
+  <section class="slide">
+    <div class="kicker">Live demo</div>
+    <h2>Let's look at <span class="accent">the actual dish</span></h2>
+    <p class="lead">Everything in this deck is running right now — not a mockup. Cells dividing, lineages competing, the gardener experimenting, the falsification lamps live.</p>
+    <div class="grid g2" style="margin-top:24px">
+      <div class="card"><h3 class="cyan">On the network</h3><p style="font-family:var(--mono);font-size:clamp(14px,1.6vw,20px);color:var(--ink)">kira-home.taila8474c.ts.net/petrilab</p><p style="margin-top:8px">Open on any device on the tailnet.</p></div>
+      <div class="card"><h3 class="violet">What to watch for</h3><p>Coloured clusters = lineages forming tissue. The MODES lines climbing = complexity accumulating. Green lamps = still genuinely evolving.</p></div>
+    </div>
+    <p class="lead" style="margin-top:22px;font-size:15px;color:var(--faint)">→ Switch to the live dashboard now.</p>
+  </section>
+
+  <!-- 11 · CLOSE -->
+  <section class="slide">
+    <div class="kicker">Where it's going</div>
+    <h2>A living, honest, <span class="accent">self-experimenting sandbox</span></h2>
+    <ul>
+      <li><b>Now:</b> live dashboard, autonomous gardener, falsification contract, open-source on GitHub. <span class="sub">Cells, lineages and metrics you can watch in real time.</span></li>
+      <li><b>Next:</b> edge-of-chaos diagnostics on screen — see the fertile regime live. <span class="sub">Avalanche power-laws, autocorrelation, perturbation health-checks.</span></li>
+      <li><b>Dream:</b> a gardener that reads the web, forms richer hypotheses, and grows complexity we didn't design. <span class="sub">Open-ended evolution you can actually point at.</span></li>
+    </ul>
+    <div class="foot"><span class="logo">Petri<span class="dot">·</span>Lab</span><span>github.com/SlambertDK/petrilab</span></div>
+  </section>
+
+</div>
+<div class="hint">← → to navigate</div>
+<script>
+  const slides=[...document.querySelectorAll('.slide')];
+  let i=0;
+  function show(n){
+    i=Math.max(0,Math.min(slides.length-1,n));
+    slides.forEach((s,k)=>s.classList.toggle('active',k===i));
+    document.getElementById('prog').style.width=((i+1)/slides.length*100)+'%';
+  }
+  document.addEventListener('keydown',e=>{
+    if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown'){show(i+1);e.preventDefault();}
+    if(e.key==='ArrowLeft'||e.key==='PageUp'){show(i-1);e.preventDefault();}
+    if(e.key==='Home')show(0); if(e.key==='End')show(slides.length-1);
+  });
+  document.addEventListener('click',e=>{ if(e.clientX>window.innerWidth*0.5)show(i+1); else show(i-1); });
+  show(0);
+</script>
+</body>
+</html>
