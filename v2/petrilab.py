@@ -89,6 +89,14 @@ class Petri:
         self.chemotaxis   = float(p.get("chemotaxis", 1.0))
         self.sense_radius = float(p.get("sense_radius", 0.22))
 
+        # --- diversity guard (anti-monoculture immigration) ---
+        # When living lineages fall below the floor, periodically inject a
+        # fresh founder line. Adds raw material only — never touches selection.
+        self.immigration      = float(p.get("immigration", 1.0))     # master on/off (0 disables)
+        self.min_lineages     = int(p.get("min_lineages", 6))        # floor before immigration kicks in
+        self.immigration_every= int(p.get("immigration_every", 400)) # gens between injections when below floor
+        self.immigrants       = int(p.get("immigrants", 2))          # fresh lines per injection
+
         # --- state ---
         self.cells: dict[int, Cell] = {}
         self.edges: list[Edge] = []
@@ -262,6 +270,20 @@ class Petri:
         self.edges = [e for e in self.edges
                       if e.src in cells and e.dst in cells
                       and (abs(e.weight) > self.prune_threshold or e.usage > 0.01)]
+
+        # 7) DIVERSITY GUARD: immigrate fresh lineages when the dish collapses
+        # toward monoculture. Pure raw-material injection — selection untouched.
+        if self.immigration > 0 and cells and len(cells) < self.max_nodes:
+            if self.generation % max(1, self.immigration_every) == 0:
+                if len(self.lineage_census()) < self.min_lineages:
+                    for _ in range(self.immigrants):
+                        self._spawn(
+                            x=self.rng.uniform(0, 1), y=self.rng.uniform(0, 1),
+                            energy=self.grow_threshold * 0.9,   # viable head-start
+                            genome=self._new_genome(),
+                            lineage_id=None, parent_id=-1,       # founds its own line
+                        )
+                    self.last_event = f"immigration@{self.generation}"
 
     # ---------------------------------------------------------------
     def lineage_census(self):
