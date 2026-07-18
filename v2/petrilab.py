@@ -357,6 +357,49 @@ class Petri:
             census[n.lineage_id] = census.get(n.lineage_id, 0) + 1
         return census
 
+    # ---------------------------------------------------------------
+    # persistence: serialize/restore the dish so progress survives restarts
+    def to_dict(self):
+        return {
+            "version": 2,
+            "seed": self.seed,
+            "generation": self.generation,
+            "next_id": self.next_id,
+            "last_event": self.last_event,
+            "params": {k: getattr(self, k) for k in sorted(self.TUNABLE)},
+            "cells": [asdict(c) for c in self.cells.values()],
+            "edges": [asdict(e) for e in self.edges],
+            "reheat": {
+                "change_hist": list(self._change_hist),
+                "reheat_until": self._reheat_until,
+                "reheat_ready_at": self._reheat_ready_at,
+                "base_gene_mut": self._base_gene_mut,
+                "base_mut": self._base_mut,
+            },
+        }
+
+    def load_dict(self, d):
+        if not d:
+            return
+        self.seed = d.get("seed", self.seed)
+        self.generation = int(d.get("generation", 0))
+        self.next_id = int(d.get("next_id", 0))
+        self.last_event = d.get("last_event")
+        for k, v in (d.get("params") or {}).items():
+            if k in self.TUNABLE and hasattr(self, k):
+                setattr(self, k, float(v))
+        self.cells = {}
+        for cd in d.get("cells", []):
+            c = Cell(**cd)
+            self.cells[c.id] = c
+        self.edges = [Edge(**ed) for ed in d.get("edges", [])]
+        rh = d.get("reheat") or {}
+        self._change_hist = list(rh.get("change_hist", []))
+        self._reheat_until = int(rh.get("reheat_until", -1))
+        self._reheat_ready_at = int(rh.get("reheat_ready_at", 0))
+        self._base_gene_mut = float(rh.get("base_gene_mut", self.gene_mut_rate))
+        self._base_mut = float(rh.get("base_mut", self.mutation_rate))
+
     def set_param(self, key, value):
         if key in self.TUNABLE and hasattr(self, key):
             setattr(self, key, float(value))

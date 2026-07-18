@@ -19,3 +19,5 @@ data/backup/
 *.swp
 .idea/
 .vscode/
+
+v2/data/

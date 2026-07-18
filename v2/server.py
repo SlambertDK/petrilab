@@ -6,10 +6,12 @@ gardener tune ratios, and serves /api/state to the dashboard.
 """
 import json
 import os
+import signal
 import threading
 import time
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
@@ -20,8 +22,12 @@ from modes import Modes
 from gardener import Gardener
 
 HERE = os.path.dirname(__file__)
-STATE_PATH = os.path.join(HERE, "data", "state.json")
+STATE_PATH = os.path.join(HERE, "data", "state.json")            # Petri sim state
+BRAIN_PATH = os.path.join(HERE, "data", "gardener_brain.json")   # Gardener memory
+FINDINGS_PATH = os.path.join(HERE, "data", "findings.md")        # durable conclusions
 LOG_PATH = os.path.join(HERE, "data", "gardener_log.md")
+
+SAVE_EVERY = 2000     # gens between persistence snapshots
 
 # Control key: write endpoints (toggle/speed/param) require this secret in the
 # X-Control-Key header. Read endpoints (/api/state, dashboard) stay public.
@@ -36,7 +42,7 @@ def _require_control(x_control_key: str | None):
 
 sim = Petri()
 modes = Modes()
-gardener = Gardener()
+gardener = Gardener(findings_path=FINDINGS_PATH)
 
 _running = True
 _speed = 200          # gens per loop batch
@@ -46,6 +52,51 @@ _lock = threading.Lock()
 
 MEASURE_EVERY = 10    # gens between MODES samples
 GARDEN_EVERY = 50     # gens between gardener ticks
+
+
+def _atomic_write(path, text):
+    """Write to a tmp file then os.replace -> the target is never half-written."""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        f.write(text)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _save_state():
+    """Persist the Petri sim AND the Gardener brain atomically. Caller holds
+    _lock (or is in a context where the sim is not mutating)."""
+    try:
+        _atomic_write(STATE_PATH, json.dumps(sim.to_dict()))
+    except Exception as e:
+        print(f"[persist] sim save failed: {e}", flush=True)
+    try:
+        _atomic_write(BRAIN_PATH, json.dumps(gardener.to_dict()))
+    except Exception as e:
+        print(f"[persist] brain save failed: {e}", flush=True)
+
+
+def _load_state():
+    """Restore sim generation/cells/genomes and the gardener brain on startup so
+    learning and progress survive restarts."""
+    if os.path.exists(STATE_PATH):
+        try:
+            with open(STATE_PATH) as f:
+                sim.load_dict(json.load(f))
+            print(f"[persist] restored sim @ gen {sim.generation}, "
+                  f"{len(sim.cells)} cells", flush=True)
+        except Exception as e:
+            print(f"[persist] sim load failed (fresh start): {e}", flush=True)
+    if os.path.exists(BRAIN_PATH):
+        try:
+            with open(BRAIN_PATH) as f:
+                gardener.load_dict(json.load(f))
+            print(f"[persist] restored gardener brain: "
+                  f"{gardener.experiments_run} experiments", flush=True)
+        except Exception as e:
+            print(f"[persist] brain load failed (fresh start): {e}", flush=True)
 
 
 def _loop():
@@ -61,10 +112,13 @@ def _loop():
                     if sim.generation % GARDEN_EVERY == 0:
                         _last_falsi = modes.falsification(sim)
                         gardener.observe(sim, _last_modes or {}, _last_falsi)
+                    if sim.generation % SAVE_EVERY == 0:
+                        _save_state()
         time.sleep(0.02)
 
 
 app = FastAPI()
+app.add_middleware(GZipMiddleware, minimum_size=500)
 
 
 def _build_state():
@@ -74,7 +128,11 @@ def _build_state():
                   "e": round(c.energy, 1), "a": round(c.activation, 2),
                   "lin": c.lineage_id, "g": len(c.genome)}
                  for c in sim.cells.values()]
-        edges = [{"s": e.src, "d": e.dst, "w": round(e.weight, 2)} for e in sim.edges]
+        # Only send the strongest edges (by |weight|). At 1000+ edges the
+        # extra lines are invisible clutter but dominate payload size; the
+        # dashboard just draws faint links, so the top 250 is plenty.
+        _edges = sorted(sim.edges, key=lambda e: -abs(e.weight))[:250]
+        edges = [{"s": e.src, "d": e.dst, "w": round(e.weight, 2)} for e in _edges]
         return {
             "generation": sim.generation,
             "cell_count": len(sim.cells),
@@ -132,6 +190,18 @@ def index():
 
 def main():
     os.makedirs(os.path.join(HERE, "data"), exist_ok=True)
+    _load_state()   # restore sim + gardener brain BEFORE the loop starts
+
+    def _on_signal(signum, frame):
+        # clean shutdown (systemctl stop/restart sends SIGTERM) -> flush to disk
+        with _lock:
+            _save_state()
+        print(f"[persist] saved on signal {signum}", flush=True)
+        os._exit(0)
+
+    signal.signal(signal.SIGTERM, _on_signal)
+    signal.signal(signal.SIGINT, _on_signal)
+
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
     port = int(os.environ.get("PETRILAB_PORT", "8770"))

@@ -7,16 +7,34 @@ near the fertile regime and to run its own experiments when things stagnate.
 
 Loop (self-generating-from-findings):
   1. Watch MODES novelty + complexity trend.
-  2. If stagnating (novelty low / complexity flat) → propose an experiment:
+  2. If stagnating (novelty low / complexity flat) -> propose an experiment:
      pick a tunable ratio, nudge it, and remember the pre-change baseline.
   3. After an evaluation window, MEASURE the effect. Keep the change if it
      improved the objective; otherwise revert. Log every decision with a reason.
-  4. Each finding seeds the next hypothesis (bias toward knobs that helped).
+  4. Each finding updates a durable per-knob effect estimate (a decayed running
+     mean of delta) that biases the next hypothesis toward knobs that genuinely
+     helped -- learning that survives restarts and does not wash out.
 
 Objective (decoupled from novelty alone to avoid gaming a single axis):
     score = 0.5*novelty + 0.3*complexity_norm + 0.2*ecology
+
+Memory model (why this is a rebuild):
+  * knob STATS: per-knob decayed running mean of delta (EWMA) + trial count +
+    running sum, instead of a single drifting credit counter that collapsed all
+    knobs to the floor. Selection uses optimistic-init + UCB so good knobs stay
+    ahead of bad ones and are picked more, while still exploring.
+  * PERSISTENCE: to_dict()/load_dict() serialize the whole brain so the server
+    can snapshot it to disk and restore it on startup -> learning survives
+    restarts.
+  * CONCLUSIONS: every N experiments the gardener summarizes trends across many
+    experiments and APPENDS durable, dated conclusions to data/findings.md,
+    including a clearly-marked '## ACTION NEEDED' block when it concludes
+    something only an engine change (level A, which it may never make) could fix.
 """
+import math
+import os
 import random
+from datetime import datetime, timezone
 
 
 class Gardener:
@@ -31,15 +49,48 @@ class Gardener:
         "structural_heredity": (0.0, 0.9, 0.1),
     }
 
-    def __init__(self, eval_window=400, seed=0):
+    # learning constants
+    EWMA_ALPHA = 0.25       # weight of the newest delta in the running mean
+    OPTIMISTIC_INIT = 0.02  # prior mean effect (>0) so untried knobs get explored
+    UCB_C = 0.03            # exploration bonus scale in the UCB selection term
+    CONCLUDE_EVERY = 25     # experiments between durable findings.md summaries
+
+    def __init__(self, eval_window=400, seed=0, findings_path=None):
         self.rng = random.Random(seed)
         self.eval_window = eval_window
         self.log = []                 # [{gen, action, reason}]
         self.pending = None           # active experiment
-        self.knob_credit = {k: 1.0 for k in self.KNOBS}  # which knobs tend to help
+        # --- per-knob effect statistics (the real memory) ---
+        # mean  : decayed running mean of delta (EWMA) -> "does this knob help?"
+        # count : number of resolved trials -> confidence
+        # sum   : running sum of deltas -> durable total effect for reporting
+        # last  : last observed delta
+        self.knob_stats = {
+            k: {"mean": self.OPTIMISTIC_INIT, "count": 0, "sum": 0.0, "last": 0.0}
+            for k in self.KNOBS
+        }
         self.last_score = None
         self.cooldown = 0
         self.phase = "idle"
+        self.experiments_run = 0      # durable cumulative experiment counter
+        self.last_conclusion_at = 0   # experiments_run at last findings write
+        self.reheat_seen = 0          # count of reheats observed (for conclusions)
+        self._last_last_event = None  # dedup engine last_event across ticks
+        self.stuck_since_gen = None   # first gen verdict became non-success
+        self.findings_path = findings_path or os.path.join(
+            os.path.dirname(__file__), "data", "findings.md")
+
+    # ---- backward-compat view: some UI code reads knob_credit ----
+    @property
+    def knob_credit(self):
+        """Legacy accessor: a positive, comparable 'credit' derived from the
+        durable stats (optimistic mean scaled into a friendly range)."""
+        return {k: self._credit(k) for k in self.KNOBS}
+
+    def _credit(self, knob):
+        s = self.knob_stats[knob]
+        # map mean effect into a positive weight; keep good knobs clearly above bad
+        return round(1.0 + 20.0 * s["mean"], 3)
 
     def _score(self, modes_rec):
         nov = modes_rec.get("novelty", 0)
@@ -52,10 +103,24 @@ class Gardener:
         if len(self.log) > 200:
             self.log = self.log[-200:]
 
+    # ---------------------------------------------------------------
     def observe(self, sim, modes_rec, falsi):
         """Called each gardener tick (e.g. every 50 gens)."""
         gen = sim.generation
         score = self._score(modes_rec)
+
+        # track how long the verdict has been unresolved/failing (for ACTION NEEDED)
+        if falsi.get("verdict") == "success":
+            self.stuck_since_gen = None
+        elif self.stuck_since_gen is None:
+            self.stuck_since_gen = gen
+
+        # observe engine reheating events (level-A mechanism firing) for conclusions
+        ev = getattr(sim, "last_event", None)
+        if ev and ev != self._last_last_event:
+            if str(ev).startswith("reheat@"):
+                self.reheat_seen += 1
+            self._last_last_event = ev
 
         # --- resolve a pending experiment across visible phases ---
         if self.pending:
@@ -65,23 +130,27 @@ class Gardener:
                 self.phase = "measure"      # step 3: gathering the effect
                 self.last_score = score
                 return
-            # age >= 2 → step 4: LEARN (keep or revert)
+            # age >= 2 -> step 4: LEARN (keep or revert)
             base = self.pending["baseline_score"]
             delta = score - base
             knob = self.pending["knob"]
+            self._record_effect(knob, delta)
+            self.experiments_run += 1
             if delta > 0.01:
-                self.knob_credit[knob] = min(3.0, self.knob_credit[knob] + 0.4)
                 self._logi(gen, f"KEEP {knob}={round(getattr(sim, knob),3)}",
-                           f"score {round(base,3)}→{round(score,3)} (+{round(delta,3)})")
+                           f"score {round(base,3)}->{round(score,3)} (+{round(delta,3)})")
             else:
                 setattr(sim, knob, self.pending["old_value"])
-                self.knob_credit[knob] = max(0.2, self.knob_credit[knob] - 0.2)
-                self._logi(gen, f"REVERT {knob}→{round(self.pending['old_value'],3)}",
-                           f"no gain (Δ{round(delta,3)}); restored")
+                self._logi(gen, f"REVERT {knob}->{round(self.pending['old_value'],3)}",
+                           f"no gain (d{round(delta,3)}); restored")
             self.pending = None
             self.phase = "learn"
             self.cooldown = 2
             self.last_score = score
+            # periodically distil many experiments into durable conclusions
+            if self.experiments_run - self.last_conclusion_at >= self.CONCLUDE_EVERY:
+                self._write_conclusions(sim, modes_rec, falsi)
+                self.last_conclusion_at = self.experiments_run
             return
 
         if self.cooldown > 0:
@@ -93,15 +162,15 @@ class Gardener:
         # --- decide whether to intervene ---
         stagnating = (modes_rec.get("novelty", 0) < 0.15) or falsi["verdict"] != "success"
         if not stagnating:
-            # things are good — occasionally probe anyway to keep exploring
+            # things are good -- occasionally probe anyway to keep exploring
             if self.rng.random() > 0.15:
                 self.last_score = score
                 return
-            reason = "healthy — exploratory probe"
+            reason = "healthy -- exploratory probe"
         else:
             reason = f"stagnation (novelty={modes_rec.get('novelty')}, verdict={falsi['verdict']})"
 
-        # --- pick a knob, biased toward ones that have helped (findings→hypothesis) ---
+        # --- pick a knob, biased toward ones that have helped (findings->hypothesis) ---
         knob = self._weighted_knob()
         lo, hi, step = self.KNOBS[knob]
         cur = getattr(sim, knob)
@@ -111,23 +180,146 @@ class Gardener:
             new = max(lo, min(hi, cur - direction * step))
         setattr(sim, knob, new)
         self.pending = {"knob": knob, "old_value": cur, "age": 0,
-                        "baseline_score": score}
+                        "baseline_score": score, "at_bound": (new in (lo, hi))}
         self.phase = "test"
-        self._logi(gen, f"TRY {knob}: {round(cur,3)}→{round(new,3)}", reason)
+        self._logi(gen, f"TRY {knob}: {round(cur,3)}->{round(new,3)}", reason)
         self.last_score = score
 
+    # ---------------------------------------------------------------
+    def _record_effect(self, knob, delta):
+        """Update the durable per-knob effect estimate with the newest delta.
+        A decayed running mean (EWMA) remembers what helped without letting the
+        estimate collapse to a floor: a knob with a positive history keeps a
+        positive mean even after some failed trials."""
+        s = self.knob_stats[knob]
+        s["count"] += 1
+        s["sum"] += delta
+        s["last"] = delta
+        if s["count"] == 1:
+            # first real observation replaces the optimistic prior
+            s["mean"] = delta
+        else:
+            s["mean"] = (1 - self.EWMA_ALPHA) * s["mean"] + self.EWMA_ALPHA * delta
+
     def _weighted_knob(self):
+        """UCB-style selection: exploit knobs with a high mean effect, but add an
+        exploration bonus that shrinks as a knob is tried more. Optimistic init
+        guarantees untried knobs are explored early. Scores are shifted positive
+        and used as softmax weights so selection stays stochastic (keeps probing)
+        while genuinely favouring what has worked."""
+        total = sum(s["count"] for s in self.knob_stats.values()) + 1
         knobs = list(self.KNOBS)
-        weights = [self.knob_credit[k] for k in knobs]
+        ucb = {}
+        for k in knobs:
+            s = self.knob_stats[k]
+            bonus = self.UCB_C * math.sqrt(math.log(total + 1) / (s["count"] + 1))
+            ucb[k] = s["mean"] + bonus
+        # softmax over UCB values (temperature keeps exploration alive)
+        temp = 0.02
+        mx = max(ucb.values())
+        weights = [math.exp((ucb[k] - mx) / temp) for k in knobs]
         return self.rng.choices(knobs, weights=weights, k=1)[0]
 
+    # ---------------------------------------------------------------
+    def _write_conclusions(self, sim, modes_rec, falsi):
+        """Distil many experiments into durable, dated conclusions appended to
+        findings.md. Also emits an ACTION NEEDED block when the gardener hits a
+        wall only an engine (level-A) change could break -- it never messages
+        anyone, it only writes the file."""
+        try:
+            os.makedirs(os.path.dirname(self.findings_path), exist_ok=True)
+            ts = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            gen = sim.generation
+            lines = []
+            lines.append(f"\n## {ts} — gardener conclusions @ gen {gen}")
+            lines.append(f"- experiments run (cumulative): {self.experiments_run}")
+            lines.append(f"- current verdict: {falsi.get('verdict')}, "
+                         f"novelty={modes_rec.get('novelty')}, "
+                         f"complexity={modes_rec.get('complexity')}, "
+                         f"ecology={modes_rec.get('ecology')}")
+
+            # rank knobs by durable mean effect
+            ranked = sorted(self.knob_stats.items(), key=lambda kv: -kv[1]["mean"])
+            lines.append("- knob mean effect (EWMA of delta over trials):")
+            for k, s in ranked:
+                if s["count"] == 0:
+                    lines.append(f"    - {k}: untried")
+                    continue
+                verdict = ("consistently helps" if s["mean"] > 0.01 else
+                           "consistently hurts" if s["mean"] < -0.01 else
+                           "neutral")
+                lines.append(f"    - {k}: mean {s['mean']:+.4f} over "
+                             f"{s['count']} trials -> {verdict}")
+
+            if self.reheat_seen:
+                lines.append(f"- engine reheating fired {self.reheat_seen}x "
+                             f"(anti-stagnation triggered)")
+
+            if self.stuck_since_gen is not None:
+                stuck_for = gen - self.stuck_since_gen
+                lines.append(f"- verdict stuck at non-success for {stuck_for} gens "
+                             f"(since gen {self.stuck_since_gen})")
+
+            # --- ACTION NEEDED detection (level-A limits the gardener cannot cross) ---
+            actions = self._detect_action_needed(sim, modes_rec, falsi)
+            if actions:
+                lines.append("\n## ACTION NEEDED")
+                lines.append(f"_(flagged {ts} @ gen {gen}; the gardener is level-B "
+                             f"and can only tune ratios — the following likely need "
+                             f"an engine/rules change a human must make)_")
+                for a in actions:
+                    lines.append(f"- {a}")
+
+            with open(self.findings_path, "a") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception as e:  # never let a logging failure kill the loop
+            self._logi(sim.generation, "CONCLUDE-ERROR", str(e)[:120])
+
+    def _detect_action_needed(self, sim, modes_rec, falsi):
+        """Return a list of situations the gardener concludes it cannot fix by
+        tuning ratios alone."""
+        actions = []
+        # 1) a knob pinned at its bound but still historically wanting more
+        for k, (lo, hi, step) in self.KNOBS.items():
+            cur = getattr(sim, k, None)
+            if cur is None:
+                continue
+            s = self.knob_stats[k]
+            if s["count"] >= 3 and s["mean"] > 0.01:
+                if abs(cur - hi) < 1e-9:
+                    actions.append(
+                        f"knob '{k}' is pinned at its MAX ({hi}) and still shows a "
+                        f"positive mean effect ({s['mean']:+.4f}) — the useful range "
+                        f"may be capped too low; consider widening the engine bound.")
+                elif abs(cur - lo) < 1e-9:
+                    actions.append(
+                        f"knob '{k}' is pinned at its MIN ({lo}) and still shows a "
+                        f"positive mean effect ({s['mean']:+.4f}) — the useful range "
+                        f"may be capped too high; consider widening the engine bound.")
+        # 2) long flat stagnation despite exploring most knobs
+        tried = sum(1 for s in self.knob_stats.values() if s["count"] > 0)
+        if (self.stuck_since_gen is not None
+                and sim.generation - self.stuck_since_gen > 50000
+                and tried >= max(1, len(self.KNOBS) - 1)):
+            actions.append(
+                f"score/verdict has been non-success for "
+                f"{sim.generation - self.stuck_since_gen} gens despite exploring "
+                f"{tried}/{len(self.KNOBS)} knobs — ratio tuning appears exhausted; "
+                f"a new mechanism (level-A: rules/genotype/output layer) is likely "
+                f"required to move further.")
+        return actions
+
+    # ---------------------------------------------------------------
     def state(self, sim):
         """Snapshot of the self-improvement loop for the dashboard."""
         # sort knobs by learned credit (what has helped most)
-        ranked = sorted(self.knob_credit.items(), key=lambda kv: -kv[1])
-        credit = [{"knob": k, "credit": round(v, 2),
+        ranked = sorted(self.knob_stats.items(), key=lambda kv: -kv[1]["mean"])
+        credit = [{"knob": k,
+                   "credit": self._credit(k),
+                   "mean_effect": round(s["mean"], 4),
+                   "trials": s["count"],
                    "value": round(getattr(sim, k), 3) if hasattr(sim, k) else None}
-                  for k, v in ranked]
+                  for k, s in ranked]
         hypothesis = None
         if self.pending:
             p = self.pending
@@ -148,7 +340,48 @@ class Gardener:
             "hypothesis": hypothesis,
             "last_outcome": last_outcome,
             "knob_credit": credit,
-            "experiments_run": len([e for e in self.log if e["action"].startswith("TRY")]),
+            "experiments_run": self.experiments_run,
             "current_score": round(self.last_score, 3) if self.last_score is not None else None,
             "phase": self.phase,
         }
+
+    # ---------------------------------------------------------------
+    # persistence: serialize/restore the whole brain so learning survives restarts
+    def to_dict(self):
+        return {
+            "version": 2,
+            "log": self.log[-200:],
+            "knob_stats": self.knob_stats,
+            "experiments_run": self.experiments_run,
+            "last_conclusion_at": self.last_conclusion_at,
+            "reheat_seen": self.reheat_seen,
+            "stuck_since_gen": self.stuck_since_gen,
+            "last_score": self.last_score,
+            "cooldown": self.cooldown,
+            "phase": self.phase,
+            # keep an in-flight experiment so a restart mid-test doesn't lose it
+            "pending": self.pending,
+        }
+
+    def load_dict(self, d):
+        if not d:
+            return
+        self.log = d.get("log", []) or []
+        saved = d.get("knob_stats", {}) or {}
+        for k in self.KNOBS:
+            if k in saved and isinstance(saved[k], dict):
+                s = saved[k]
+                self.knob_stats[k] = {
+                    "mean": float(s.get("mean", self.OPTIMISTIC_INIT)),
+                    "count": int(s.get("count", 0)),
+                    "sum": float(s.get("sum", 0.0)),
+                    "last": float(s.get("last", 0.0)),
+                }
+        self.experiments_run = int(d.get("experiments_run", 0))
+        self.last_conclusion_at = int(d.get("last_conclusion_at", 0))
+        self.reheat_seen = int(d.get("reheat_seen", 0))
+        self.stuck_since_gen = d.get("stuck_since_gen", None)
+        self.last_score = d.get("last_score", None)
+        self.cooldown = int(d.get("cooldown", 0))
+        self.phase = d.get("phase", "idle")
+        self.pending = d.get("pending", None)
