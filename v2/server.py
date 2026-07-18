@@ -9,7 +9,7 @@ import os
 import threading
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 import uvicorn
 
@@ -22,6 +22,17 @@ from gardener import Gardener
 HERE = os.path.dirname(__file__)
 STATE_PATH = os.path.join(HERE, "data", "state.json")
 LOG_PATH = os.path.join(HERE, "data", "gardener_log.md")
+
+# Control key: write endpoints (toggle/speed/param) require this secret in the
+# X-Control-Key header. Read endpoints (/api/state, dashboard) stay public.
+# Set via env PETRILAB_CONTROL_KEY; if unset, write endpoints are disabled
+# entirely (fail closed) so a public URL can never touch server resources.
+CONTROL_KEY = os.environ.get("PETRILAB_CONTROL_KEY", "").strip()
+
+
+def _require_control(x_control_key: str | None):
+    if not CONTROL_KEY or x_control_key != CONTROL_KEY:
+        raise HTTPException(status_code=403, detail="control disabled")
 
 sim = Petri()
 modes = Modes()
@@ -87,21 +98,24 @@ def api_state():
 
 
 @app.post("/api/toggle")
-def api_toggle():
+def api_toggle(x_control_key: str | None = Header(default=None)):
+    _require_control(x_control_key)
     global _running
     _running = not _running
     return {"ok": True, "running": _running}
 
 
 @app.post("/api/speed/{value}")
-def api_speed(value: int):
+def api_speed(value: int, x_control_key: str | None = Header(default=None)):
+    _require_control(x_control_key)
     global _speed
     _speed = max(1, min(2000, int(value)))
     return {"ok": True, "speed": _speed}
 
 
 @app.post("/api/param/{key}/{value}")
-def api_param(key: str, value: float):
+def api_param(key: str, value: float, x_control_key: str | None = Header(default=None)):
+    _require_control(x_control_key)
     with _lock:
         ok = sim.set_param(key, value)
     return {"ok": ok, "key": key, "value": value}

@@ -97,12 +97,29 @@ class Petri:
         self.immigration_every= int(p.get("immigration_every", 400)) # gens between injections when below floor
         self.immigrants       = int(p.get("immigrants", 2))          # fresh lines per injection
 
+        # --- reheating (anti-stagnation) ---
+        # When change flatlines (system runs in a circle instead of accumulating),
+        # temporarily raise mutation/noise to shake the equilibrium loose, then cool
+        # back down. Direct antidote to the class-2 "periodic, not novel" trap.
+        self.reheating        = float(p.get("reheating", 1.0))       # master on/off (0 disables)
+        self.stagnation_thresh= float(p.get("stagnation_thresh", 0.008))  # CV of complexity below this = stagnant
+        self.stagnation_window= int(p.get("stagnation_window", 30))  # samples of change to average
+        self.reheat_gain      = float(p.get("reheat_gain", 3.0))     # multiplier on mutation while hot
+        self.reheat_duration  = int(p.get("reheat_duration", 1500))  # gens a reheat lasts
+        self.reheat_cooldown  = int(p.get("reheat_cooldown", 4000))  # min gens between reheats
+
         # --- state ---
         self.cells: dict[int, Cell] = {}
         self.edges: list[Edge] = []
         self.next_id = 0
         self.generation = 0
         self.last_event = None
+        # reheating runtime state
+        self._change_hist = []          # rolling turnover proxy
+        self._reheat_until = -1         # gen the current reheat ends (-1 = cold)
+        self._reheat_ready_at = 0       # earliest gen a new reheat may start
+        self._base_gene_mut = self.gene_mut_rate
+        self._base_mut = self.mutation_rate
 
         self._seed_world()
 
@@ -160,9 +177,47 @@ class Petri:
         return c
 
     # ---------------------------------------------------------------
+    def _manage_reheat(self):
+        """Anti-stagnation 'temperature' control. When the complexity proxy
+        (mean genome length) flatlines, temporarily raise mutation to shake the
+        equilibrium loose, then cool back to baseline. Level-B: touches only
+        mutation rates (variation), never the rules or selection."""
+        if self.reheating <= 0:
+            return
+        g = self.generation
+        # currently hot? cool down when the window expires.
+        if self._reheat_until > 0:
+            if g >= self._reheat_until:
+                self.gene_mut_rate = self._base_gene_mut
+                self.mutation_rate = self._base_mut
+                self._reheat_until = -1
+                self._reheat_ready_at = g + self.reheat_cooldown
+                self.last_event = f"cooldown@{g}"
+            return
+        # cold: only consider reheating once we have a full window and cooldown passed.
+        if g < self._reheat_ready_at:
+            return
+        if len(self._change_hist) < self.stagnation_window:
+            return
+        # measure flatness relative to the mean (coefficient of variation), so
+        # the test scales with genome size instead of an absolute epsilon.
+        mean = sum(self._change_hist) / len(self._change_hist)
+        var = sum((x - mean) ** 2 for x in self._change_hist) / len(self._change_hist)
+        std = var ** 0.5
+        cv = std / mean if mean > 0 else 0.0
+        if cv < self.stagnation_thresh:
+            # stagnant → reheat
+            self.gene_mut_rate = self._base_gene_mut * self.reheat_gain
+            self.mutation_rate = self._base_mut * self.reheat_gain
+            self._reheat_until = g + self.reheat_duration
+            self.last_event = f"reheat@{g}"
+
+    # ---------------------------------------------------------------
     def step(self):
         self.generation += 1
         cells = self.cells
+        # reheat scheduling: manage the "temperature" before growth happens
+        self._manage_reheat()
         if not cells:
             self._seed_world(8)  # reseed rather than sit dead
             return
@@ -270,6 +325,15 @@ class Petri:
         self.edges = [e for e in self.edges
                       if e.src in cells and e.dst in cells
                       and (abs(e.weight) > self.prune_threshold or e.usage > 0.01)]
+
+        # record stagnation proxy: mean genome length (system complexity).
+        # Sampled sparsely so the window spans a meaningful timescale (not 30
+        # adjacent gens, which always look flat). 30 samples × 50 gens ≈ 1500 gens.
+        if self.generation % 50 == 0:
+            _mean_genome = sum(len(c.genome) for c in cells.values()) / max(1, len(cells))
+            self._change_hist.append(_mean_genome)
+            if len(self._change_hist) > self.stagnation_window:
+                self._change_hist.pop(0)
 
         # 7) DIVERSITY GUARD: immigrate fresh lineages when the dish collapses
         # toward monoculture. Pure raw-material injection — selection untouched.

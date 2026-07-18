@@ -159,8 +159,7 @@
       <div class="stat"><div class="v" id="s-exp">—</div><div class="k">EXPERIMENTS</div></div>
     </div>
     <div class="ctrls">
-      <button class="ctl" id="btnPause">❚❚ Pause</button>
-      <div class="speed"><span id="spdLbl">SPEED · —</span><input type="range" min="1" max="800" value="200" id="spd"></div>
+      <span class="speed"><span id="spdLbl">SPEED · —</span></span>
     </div>
   </header>
 
@@ -408,11 +407,8 @@ function renderGardener(){
       <div class="r">${e.reason}</div></div>`;}).join('');
 }
 
-// ---------- controls ----------
-$('btnPause').onclick=async()=>{try{const r=await fetch('api/toggle',{method:'POST'});const j=await r.json();
-  $('btnPause').textContent=j.running?'❚❚ Pause':'▶ Resume';}catch(e){}};
-$('spd').oninput=async e=>{$('spdLbl').textContent='SPEED · '+e.target.value;
-  try{await fetch('api/speed/'+e.target.value,{method:'POST'});}catch(err){}};
+// ---------- controls removed: public dashboard is read-only ----------
+// The gardener runs autonomously; parameters are tuned in code, not the UI.
 
 // ---------- main loop ----------
 async function tick(){
@@ -424,8 +420,7 @@ async function tick(){
     $('s-cells').textContent=fmt(last.cell_count);
     $('s-lin').textContent=fmt(last.lineage_count);
     $('s-exp').textContent=fmt((last.gardener||{}).experiments_run);
-    if(document.activeElement!==$('spd')){$('spd').value=last.speed;$('spdLbl').textContent='SPEED · '+last.speed;}
-    $('btnPause').textContent=last.running?'❚❚ Pause':'▶ Resume';
+    if($('spdLbl')){$('spdLbl').textContent='SPEED · '+last.speed;}
     drawPetri();drawModes();renderMlegend();renderFalsi();renderGardener();
   }catch(e){$('liveTag').style.color='var(--red)';$('liveTag').textContent='● OFFLINE';}
 }
