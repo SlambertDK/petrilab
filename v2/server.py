@@ -188,6 +188,15 @@ def index():
     return "<h1>PetriLab v2</h1><p>dashboard.html not built yet</p>"
 
 
+@app.get("/deck", response_class=HTMLResponse)
+def deck():
+    path = os.path.join(HERE, "deck.html")
+    if os.path.exists(path):
+        with open(path) as f:
+            return f.read()
+    return "<h1>PetriLab</h1><p>deck.html not found</p>"
+
+
 def main():
     os.makedirs(os.path.join(HERE, "data"), exist_ok=True)
     _load_state()   # restore sim + gardener brain BEFORE the loop starts
