@@ -198,6 +198,12 @@ def index():
     return "<h1>PetriLab v2</h1><p>dashboard.html not built yet</p>"
 
 
+@app.get("/og-image.png")
+def og_image():
+    from fastapi.responses import FileResponse
+    return FileResponse(os.path.join(HERE, "og-image.png"), media_type="image/png")
+
+
 @app.get("/deck", response_class=HTMLResponse)
 def deck():
     path = os.path.join(HERE, "deck.html")
