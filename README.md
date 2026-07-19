@@ -10,6 +10,10 @@ falsifiable hypotheses, tests each one against a control (one mechanism at a tim
 both confirmations *and* honest negative results. This repository ships a real evidence chain
 of 9 hypotheses produced this way — 6 confirmed, 3 inconclusive.
 
+**Live observatory:** [petrilab.slambert.com](https://petrilab.slambert.com) — public, read-only,
+runs unattended. A [scientific preprint](https://petrilab.slambert.com/paper) grounds every
+design choice in the open-ended-evolution and edge-of-chaos literature.
+
 ![PetriLab dashboard](docs/screenshot.png)
 
 *The live dashboard: emergence metrics, a trend graph with phase-transition markers, and the
@@ -35,17 +39,42 @@ instead of settling into a dead equilibrium (homeostasis)?**
 
 ## What makes it different: the research gardener
 
-An autonomous "gardener" tends the dish on a schedule (e.g. every 6 hours). It is **not** allowed
-to touch the rules. It may only:
+An autonomous "gardener" tends the dish on a schedule. It is **not** allowed
+to touch the rules or the genome — **level B: it may only tune conditions/ratios.** It:
 
-1. Read the current state and metrics.
-2. Propose a falsifiable hypothesis about a condition or feature-flag.
-3. Run a controlled A/B experiment (feature ON vs. control OFF) across seeds.
-4. Judge the result against a pre-declared threshold.
-5. Log the outcome — **including negative results** — to an append-only evidence chain.
+1. Watches the MODES novelty + complexity trend.
+2. When stagnating, proposes an experiment: nudge one condition-knob (energy influx, mutation,
+   seasons, season length, signalling), remembering the baseline.
+3. Waits an evaluation window, then measures the effect on a composite objective
+   (`0.5·novelty + 0.3·complexity + 0.2·ecology`, deliberately not novelty alone, to avoid
+   gaming a single axis).
+4. Keeps or reverts the change, logging every decision with a reason.
 
-This turns the simulation into a self-driving laboratory. The `research.py` module and the
-gardener pattern (see [`docs/GARDENER.md`](docs/GARDENER.md)) let you wire it to any scheduler.
+**It learns and remembers.** Each knob carries a durable running estimate of its real effect
+(an EWMA), and selection is biased toward knobs that have genuinely helped — so learning
+*accumulates* instead of restarting. The gardener's brain and the dish state both persist to
+disk and survive restarts. Every 25 experiments it distils its trials into dated conclusions
+appended to `data/findings.md`, and emits an explicit **`## ACTION NEEDED`** block when it
+concludes it has hit a wall that only an engine change (level A, which it may never make)
+could break.
+
+The `research.py` module and the gardener pattern (see [`docs/GARDENER.md`](docs/GARDENER.md))
+let you wire it to any scheduler.
+
+---
+
+## Breaking homeostasis: three self-healing mechanisms
+
+The dish is built to resist settling into a dead equilibrium:
+
+- **Seasons** — light influx is modulated cyclically, keeping the selection landscape moving so
+  the population cannot "solve" the world and stop (finding H0003: **+375% innovation**).
+- **Immigration** — when living lineages fall below a floor, fresh founder lines are injected.
+  Pure raw-material injection that never touches selection — the antidote to monoculture collapse
+  in long runs. *Diversity, not input volume, is the resource that runs out.*
+- **Reheating** — when complexity flatlines, mutation is temporarily raised, then cooled back to
+  baseline (simulated annealing with restarts). An explicit remedy for stagnation. Touches only
+  variation, never rules or selection.
 
 ---
 
@@ -104,12 +133,11 @@ Reproduce a confirmed finding from the command line:
 
 | File | Role |
 |------|------|
-| `engine.py` | The deterministic simulation engine. Seeded and reproducible. Six feature flags (seasons, endogenous selection, chemotaxis, structural heredity, signaling), all default **OFF** = control. |
-| `metrics.py` | Emergence metrics: complexity, modularity, cycles, depth, persistence, spatial coherence, communication. |
-| `experiment.py` | Controlled experiment harness: run one condition vs. control across seeds, aggregate, judge. |
-| `research.py` | The research module: propose / test / register hypotheses → findings log. |
-| `v2/server.py` + `v2/dashboard.html` | The live **Observatory** dashboard that `./run.sh` starts: petri view, MODES axes, falsification contract, and the Gardener loop. Fully responsive. |
-| `server.py` | Legacy v1 dashboard (emergence-metric grid + trend graph). Kept for reference. |
+| `v2/petrilab.py` | **The live engine.** Deterministic, seeded, reproducible. Cells with variable-length genomes, lineages, an open genotype, and the three self-healing mechanisms (seasons, immigration, reheating). State persists across restarts. |
+| `v2/gardener.py` | **The autonomous experimenter.** Level-B: tunes only conditions, never rules/DNA. Durable per-knob learning (EWMA), dated conclusions to `data/findings.md`, `ACTION NEEDED` escalation. Brain persists across restarts. |
+| `v2/modes.py` | MODES-style measurement over persistent lineages (change, novelty, ecology, complexity) + a three-condition falsification contract that can declare the run a failure. |
+| `v2/server.py` + `v2/dashboard.html` | The live **Observatory**: petri view, MODES axes, falsification verdict, the Gardener loop, live-viewer count. Serves `/paper` (the preprint) and `/deck`. Fully responsive. |
+| `engine.py`, `metrics.py`, `experiment.py`, `research.py`, `server.py` | Legacy v1: the original engine, metric grid, experiment harness and dashboard that produced the H0001–H0009 evidence chain. Kept for reference and reproducibility. |
 
 See [`docs/RESEARCH.md`](docs/RESEARCH.md) for the full research design and
 [`docs/GARDENER.md`](docs/GARDENER.md) for the auto-research how-to.
