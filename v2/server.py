@@ -46,6 +46,7 @@ gardener = Gardener(findings_path=FINDINGS_PATH)
 
 _running = True
 _speed = 200          # gens per loop batch
+_viewers = {}         # anonymous viewer-id -> last-seen epoch (live-viewer count)
 _last_modes = {}
 _last_falsi = {}
 _lock = threading.Lock()
@@ -147,11 +148,20 @@ def _build_state():
             "gardener": gardener.state(sim),
             "running": _running,
             "speed": _speed,
+            "viewers": len(_viewers),
         }
 
 
 @app.get("/api/state")
-def api_state():
+def api_state(v: str | None = None):
+    # Live-viewer tracking: each client sends a stable anonymous id (?v=...).
+    # We remember last-seen time per id; "viewers" = ids seen in the last 15s.
+    now = time.time()
+    if v:
+        _viewers[v] = now
+    cutoff = now - 15
+    for vid in [k for k, t in _viewers.items() if t < cutoff]:
+        del _viewers[vid]
     return JSONResponse(_build_state())
 
 

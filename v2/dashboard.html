@@ -152,6 +152,7 @@
       <div class="dot"></div>
       <div><h1>PETRI<b>LAB</b></h1><div class="sub">ARTIFICIAL LIFE OBSERVATORY</div></div>
     </div>
+    <div id="viewers" style="font-family:var(--mono);font-size:13px;font-weight:700;letter-spacing:.5px;color:#fff;background:var(--red);padding:6px 13px;border-radius:20px;box-shadow:0 0 12px var(--red);white-space:nowrap">● 1 watching</div>
     <div class="stats">
       <div class="stat"><div class="v" id="s-gen">—</div><div class="k">GENERATION</div></div>
       <div class="stat"><div class="v" id="s-cells">—</div><div class="k">CELLS</div></div>
@@ -233,6 +234,10 @@
 
 <script>
 const $=id=>document.getElementById(id);
+// Stable anonymous viewer id (persists per browser) for the live-viewer count.
+const VIEWER_ID=(()=>{try{let v=localStorage.getItem('petri_vid');
+  if(!v){v=Date.now().toString(36)+Math.random().toString(36).slice(2,8);localStorage.setItem('petri_vid',v);}
+  return v;}catch(e){return Math.random().toString(36).slice(2,10);}})();
 const fmt=(v,d=0)=>(v==null||Number.isNaN(v))?'—':(typeof v==='number'?v.toFixed(d):v);
 const MODES=[
   {k:'change',c:'#3f7bff',label:'Change',help:'Turnover of the lineage mix since last sample.'},
@@ -414,9 +419,10 @@ function renderGardener(){
 // ---------- main loop ----------
 async function tick(){
   try{
-    const r=await fetch('api/state',{cache:'no-store'});
+    const r=await fetch('api/state?v='+VIEWER_ID,{cache:'no-store'});
     last=await r.json();
     $('liveTag').style.color='var(--green)';$('liveTag').textContent='● LIVE';
+    if($('viewers')){const n=last.viewers||1;$('viewers').textContent='● '+n+(n===1?' watching':' watching');}
     $('s-gen').textContent=fmt(last.generation);
     $('s-cells').textContent=fmt(last.cell_count);
     $('s-lin').textContent=fmt(last.lineage_count);
