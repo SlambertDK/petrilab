@@ -12,7 +12,9 @@ of 9 hypotheses produced this way — 6 confirmed, 3 inconclusive.
 
 **Live observatory:** [petrilab.slambert.com](https://petrilab.slambert.com) — public, read-only,
 runs unattended. A [scientific preprint](https://petrilab.slambert.com/paper) grounds every
-design choice in the open-ended-evolution and edge-of-chaos literature.
+design choice in the open-ended-evolution and edge-of-chaos literature, and a live
+[data-science report](https://petrilab.slambert.com/report) shows the gardener's own
+correlation, significance, and trend analysis over its logged experiments.
 
 ![PetriLab dashboard](docs/screenshot.png)
 
@@ -63,6 +65,35 @@ let you wire it to any scheduler.
 
 ---
 
+## The gardener does data science: correlation, or just chance?
+
+An EWMA tells you a knob's *average* effect — but not whether that effect is **real** or
+just noise around zero. So the gardener now runs an explicit statistical layer on itself
+([`v2/analytics.py`](v2/analytics.py)) and answers the first question a scientist would ask:
+*does this condition correlate with success, or did the big cells just happen?*
+
+- **It logs.** Every resolved experiment is appended to `data/observations.jsonl` — one row per
+  experiment: the condition changed, the full condition vector, and the outcomes (complexity,
+  novelty, ecology, cell/lineage counts, largest genome). A reproducible dataset, not a summary.
+- **It tests.** Pearson correlation between each condition and each outcome, each graded by a
+  one-sample *t*-test — `t = r·√((n−2)/(1−r²))` — with a verdict at |t| ≥ 1.96 (p < 0.05) and
+  |t| ≥ 2.58 (p < 0.01). "REAL", "likely", or "chance" — distinguished, not asserted.
+- **It trends.** A least-squares fit to the upper envelope of the complexity peaks decides the
+  project's central question empirically: are the peaks **climbing** (class-4 accumulation) or
+  just **repeating** (class-2 oscillation)?
+
+Everything renders on demand as a visual report at **[`/report`](https://petrilab.slambert.com/report)**
+(correlation tables with significance badges, a diverging-bar "recipe" of which conditions co-move
+with bigger cells, and univariate regressions with R²) — inline SVG, no external libraries, every
+number traceable to the log. The current verdict is an **honest null**: the peaks repeat rather
+than climb, and no single condition significantly drives the giant cells. Oscillation, not yet
+accumulation — a dashboard that admits "not proven" beats one that always looks green.
+
+The `research.py` module and the gardener pattern (see [`docs/GARDENER.md`](docs/GARDENER.md))
+let you wire it to any scheduler.
+
+---
+
 ## Breaking homeostasis: three self-healing mechanisms
 
 The dish is built to resist settling into a dead equilibrium:
@@ -99,6 +130,12 @@ inconclusive results are kept on purpose — that's the point.
 but H0008 (inheriting the mother cell's **connection pattern**) worked. Information lives in the
 *connections*, not in the cells. That reframing drove the whole phase-2/phase-3 design.
 
+**The live verdict is deliberately unfinished.** Over the gardener's own logged experiments, the
+data-science layer currently finds *no* single condition significantly correlated with the giant
+high-complexity cells, and the complexity peaks repeat rather than climb — class-2 oscillation,
+not class-4 accumulation. That honest null is the current frontier: see the live
+[`/report`](https://petrilab.slambert.com/report).
+
 Full evidence chain with timestamps and thresholds: [`RESULTS.md`](RESULTS.md).
 
 ---
@@ -134,9 +171,10 @@ Reproduce a confirmed finding from the command line:
 | File | Role |
 |------|------|
 | `v2/petrilab.py` | **The live engine.** Deterministic, seeded, reproducible. Cells with variable-length genomes, lineages, an open genotype, and the three self-healing mechanisms (seasons, immigration, reheating). State persists across restarts. |
-| `v2/gardener.py` | **The autonomous experimenter.** Level-B: tunes only conditions, never rules/DNA. Durable per-knob learning (EWMA), dated conclusions to `data/findings.md`, `ACTION NEEDED` escalation. Brain persists across restarts. |
+| `v2/gardener.py` | **The autonomous experimenter.** Level-B: tunes only conditions, never rules/DNA. Durable per-knob learning (EWMA) plus online significance testing, dated conclusions to `data/findings.md`, `ACTION NEEDED` escalation. Logs every experiment to `data/observations.jsonl`. Brain persists across restarts. |
+| `v2/analytics.py` | **The data-science layer.** Builds correlation + *t*-test significance models and a complexity-trend estimator over the observation log, and renders the visual report. No external libraries — fully reproducible. |
+| `v2/server.py` + `v2/dashboard.html` | The live **Observatory**: petri view, MODES axes, falsification verdict, the Gardener loop, live-viewer count. Serves `/paper` (the preprint), `/deck`, and `/report` (the data-science report). Fully responsive. |
 | `v2/modes.py` | MODES-style measurement over persistent lineages (change, novelty, ecology, complexity) + a three-condition falsification contract that can declare the run a failure. |
-| `v2/server.py` + `v2/dashboard.html` | The live **Observatory**: petri view, MODES axes, falsification verdict, the Gardener loop, live-viewer count. Serves `/paper` (the preprint) and `/deck`. Fully responsive. |
 | `engine.py`, `metrics.py`, `experiment.py`, `research.py`, `server.py` | Legacy v1: the original engine, metric grid, experiment harness and dashboard that produced the H0001–H0009 evidence chain. Kept for reference and reproducibility. |
 
 See [`docs/RESEARCH.md`](docs/RESEARCH.md) for the full research design and
