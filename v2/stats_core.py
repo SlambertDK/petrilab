@@ -289,3 +289,153 @@ def sens_slope(xs):
     if m % 2 == 1:
         return slopes[m // 2]
     return 0.5 * (slopes[m // 2 - 1] + slopes[m // 2])
+
+
+# ----------------------------------------------------------------------
+# two-way interaction test  (addresses the univariate limitation / H0008)
+def _solve_ols(X, y):
+    """Ordinary least squares beta = (X'X)^-1 X'y via Gaussian elimination.
+    X is a list of rows (each row a list of predictors incl. intercept).
+    Returns (beta list, fitted list) or (None, None) if singular.
+    """
+    p = len(X[0])
+    n = len(X)
+    # normal equations A beta = b
+    A = [[0.0] * p for _ in range(p)]
+    b = [0.0] * p
+    for i in range(n):
+        xi = X[i]
+        yi = y[i]
+        for r in range(p):
+            b[r] += xi[r] * yi
+            for c in range(p):
+                A[r][c] += xi[r] * xi[c]
+    # augment and eliminate
+    M = [A[r][:] + [b[r]] for r in range(p)]
+    for col in range(p):
+        piv = max(range(col, p), key=lambda r: abs(M[r][col]))
+        if abs(M[piv][col]) < 1e-12:
+            return None, None
+        M[col], M[piv] = M[piv], M[col]
+        pivval = M[col][col]
+        M[col] = [v / pivval for v in M[col]]
+        for r in range(p):
+            if r != col and abs(M[r][col]) > 1e-15:
+                factor = M[r][col]
+                M[r] = [M[r][k] - factor * M[col][k] for k in range(p + 1)]
+    beta = [M[r][p] for r in range(p)]
+    fitted = [sum(beta[k] * X[i][k] for k in range(p)) for i in range(n)]
+    return beta, fitted
+
+
+def _standardize(vals):
+    n = len(vals)
+    m = sum(vals) / n
+    var = sum((v - m) ** 2 for v in vals) / n
+    sd = math.sqrt(var) if var > 1e-12 else 1.0
+    return [(v - m) / sd for v in vals]
+
+
+def interaction_test(a_raw, b_raw, y_raw, nperm=800, seed=12345, block=None):
+    """Moving-block Freedman-Lane permutation test for the A*B interaction on y,
+    controlling for both main effects A and B, and — critically — respecting the
+    autocorrelation of the residuals.
+
+    Why blocks: to test whether the *interaction* term carries signal we hold the
+    main effects fixed by permuting the residuals of the reduced model y ~ A + B
+    (Freedman-Lane 1983). But these residuals are a time-series from one running
+    sim and are autocorrelated; a plain shuffle assumes exchangeability, narrows
+    the null, and manufactures false interactions (the exact trap the rest of this
+    module avoids). We therefore permute in *moving blocks* of length b ~ n^(1/3)
+    (Kunsch 1989), which preserves local serial dependence under the null. This is
+    the block-bootstrap analogue of the n_eff correction used for the correlations.
+
+    Predictors are centered so the product term is not a mean artifact.
+    Returns dict: beta_int, part_r2 (extra variance over the A+B model), p
+    (two-sided permutation), n, block.
+    """
+    pairs = [(a, b, c) for a, b, c in zip(a_raw, b_raw, y_raw)
+             if isinstance(a, (int, float)) and isinstance(b, (int, float))
+             and isinstance(c, (int, float))]
+    n = len(pairs)
+    if n < 24:
+        return {"beta_int": None, "part_r2": None, "p": None, "n": n, "block": None}
+    A = _standardize([p[0] for p in pairs])
+    B = _standardize([p[1] for p in pairs])
+    y = [p[2] for p in pairs]
+    AB = [A[i] * B[i] for i in range(n)]
+    my = sum(y) / n
+    sstot = sum((v - my) ** 2 for v in y)
+    if sstot < 1e-12:
+        return {"beta_int": None, "part_r2": None, "p": None, "n": n, "block": None}
+
+    # reduced model y ~ 1 + A + B
+    Xr = [[1.0, A[i], B[i]] for i in range(n)]
+    beta_r, fit_r = _solve_ols(Xr, y)
+    if beta_r is None:
+        return {"beta_int": None, "part_r2": None, "p": None, "n": n, "block": None}
+    resid_r = [y[i] - fit_r[i] for i in range(n)]
+    ssr_reduced = sum(r * r for r in resid_r)
+
+    # full model y ~ 1 + A + B + A*B
+    Xf = [[1.0, A[i], B[i], AB[i]] for i in range(n)]
+    beta_f, fit_f = _solve_ols(Xf, y)
+    if beta_f is None:
+        return {"beta_int": None, "part_r2": None, "p": None, "n": n, "block": None}
+    ssr_full = sum((y[i] - fit_f[i]) ** 2 for i in range(n))
+    beta_int = beta_f[3]
+    part_r2 = max(0.0, (ssr_reduced - ssr_full) / sstot)
+
+    if block is None:
+        # conservative block length ~ 2*n^(1/3): the knobs AND the outcome are
+        # strongly autocorrelated (the gardener changes one knob at a time and
+        # they drift slowly), so we err toward longer blocks to avoid breaking
+        # serial structure and under-stating the null spread.
+        block = max(3, int(round(2 * n ** (1.0 / 3.0))))
+    rng = _LCG(seed)
+    count = 0
+    done = 0
+    for _ in range(nperm):
+        perm = _moving_block_permute(resid_r, block, rng)
+        ystar = [fit_r[i] + perm[i] for i in range(n)]
+        bf, _f = _solve_ols(Xf, ystar)
+        if bf is None:
+            continue
+        done += 1
+        if abs(bf[3]) >= abs(beta_int) - 1e-15:
+            count += 1
+    if done == 0:
+        return {"beta_int": round(beta_int, 5), "part_r2": round(part_r2, 5),
+                "p": None, "n": n, "block": block}
+    p = (count + 1) / (done + 1)
+    return {"beta_int": round(beta_int, 5), "part_r2": round(part_r2, 5),
+            "p": round(p, 5), "n": n, "block": block}
+
+
+def _moving_block_permute(x, block, rng):
+    """Reassemble a series by drawing random contiguous blocks of length `block`
+    (with wraparound) until it is at least len(x), then truncate. Preserves
+    within-block autocorrelation; only the block order is randomized."""
+    n = len(x)
+    out = []
+    nblocks = (n + block - 1) // block
+    for _ in range(nblocks):
+        start = rng._next() % n
+        for k in range(block):
+            out.append(x[(start + k) % n])
+    return out[:n]
+
+
+class _LCG:
+    """Tiny deterministic PRNG (no global-state dependence, reproducible)."""
+    def __init__(self, seed):
+        self.s = seed & 0xFFFFFFFF
+
+    def _next(self):
+        self.s = (1103515245 * self.s + 12345) & 0x7FFFFFFF
+        return self.s
+
+    def shuffle(self, arr):
+        for i in range(len(arr) - 1, 0, -1):
+            j = self._next() % (i + 1)
+            arr[i], arr[j] = arr[j], arr[i]

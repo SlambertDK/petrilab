@@ -228,23 +228,46 @@ def paper():
 
 @app.get("/report", response_class=HTMLResponse)
 def report():
-    """Live data-science report: rebuild models from the observation log on each
-    request so it always reflects the latest experiments."""
-    try:
-        import analytics
-        models = analytics.build_models()
-        return analytics.render_report(models)
-    except Exception as e:
-        return f"<h1>PetriLab report</h1><pre>report error: {str(e)}</pre>"
+    """Serve the most recent precomputed data-science report. A background thread
+    rebuilds it periodically (see _report_loop) so the heavy permutation tests
+    never run inside a request and never starve the sim's tick loop."""
+    html = _REPORT.get("html")
+    if html:
+        return html
+    # first-run fallback before the background build has finished
+    return ("<h1>PetriLab report</h1><p>The statistical report is being computed "
+            "for the first time — refresh in a few seconds.</p>")
 
 
 @app.get("/api/report")
 def api_report():
-    try:
-        import analytics
-        return JSONResponse(analytics.build_models())
-    except Exception as e:
-        return JSONResponse({"error": str(e)}, status_code=500)
+    models = _REPORT.get("models")
+    if models:
+        return JSONResponse(models)
+    return JSONResponse({"status": "warming up"}, status_code=503)
+
+
+_REPORT = {"html": None, "models": None, "built_at": 0}
+
+
+def _report_loop(interval=120):
+    """Rebuild the statistics report off the request path. Runs the expensive
+    interaction permutation tests in a daemon thread; the GIL is released enough
+    between numpy-free pure-Python loops that the sim keeps ticking, and requests
+    only ever read the cached string."""
+    import time
+    import analytics
+    while True:
+        try:
+            models = analytics.build_models()
+            html = analytics.render_report(models)
+            _REPORT["models"] = models
+            _REPORT["html"] = html
+            _REPORT["built_at"] = time.time()
+        except Exception as e:
+            if _REPORT["html"] is None:
+                _REPORT["html"] = f"<h1>PetriLab report</h1><pre>report error: {e}</pre>"
+        time.sleep(interval)
 
 
 def main():
@@ -263,6 +286,8 @@ def main():
 
     t = threading.Thread(target=_loop, daemon=True)
     t.start()
+    rt = threading.Thread(target=_report_loop, daemon=True)
+    rt.start()
     port = int(os.environ.get("PETRILAB_PORT", "8770"))
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
 

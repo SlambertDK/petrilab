@@ -148,6 +148,24 @@ def _recipe(rows, target="complexity"):
 
 
 # ----------------------------------------------------------------------
+_CACHE = {"key": None, "models": None}
+
+
+def build_models_cached(path=OBS_PATH, ttl=180):
+    """Cache wrapper for the report route: the interaction permutation tests are
+    expensive (~15s), and the sim writes to the log continuously, so we gate on
+    TTL alone — a report up to `ttl` seconds stale is fine and keeps /report
+    responsive instead of recomputing on every hit."""
+    import time
+    now = time.time()
+    c = _CACHE
+    if c["models"] is not None and now - c.get("built_at", 0) < ttl:
+        return c["models"]
+    m = build_models(path)
+    c["models"], c["built_at"] = m, now
+    return m
+
+
 def build_models(path=OBS_PATH):
     rows = load_rows(path)
     n = len(rows)
@@ -160,6 +178,7 @@ def build_models(path=OBS_PATH):
         "recipe": [],         # knob lift toward complexity
         "interventions": [],  # per-knob paired-delta causal tests (the strong evidence)
         "trend": {},          # Mann-Kendall on complexity over time
+        "interactions_2way": [],  # per knob-pair A*B interaction on complexity
         "outcome_summary": {},
         "method_notes": [],
     }
@@ -297,6 +316,43 @@ def build_models(path=OBS_PATH):
                         if sc.sens_slope(cx_series) is not None else None)
     models["trend"] = mk
 
+    # ---- two-way interactions on complexity (addresses univariate limitation) ----
+    # The project's own H0008 says the signal lives in interactions, not single
+    # knobs. Test every knob PAIR for an A*B interaction effect on complexity,
+    # controlling for both main effects (Freedman-Lane permutation), then FDR
+    # across the whole pair family so a single hit must survive multiplicity.
+    inter = []
+    ipvals = []
+    cy = _col(rows, "complexity")
+    for a in range(len(KNOBS)):
+        for b in range(a + 1, len(KNOBS)):
+            ka, kb = KNOBS[a], KNOBS[b]
+            res = sc.interaction_test(_col(rows, ka), _col(rows, kb), cy, nperm=400)
+            if res.get("p") is None:
+                continue
+            e = {"pair": f"{ka} × {kb}", "a": ka, "b": kb,
+                 "beta_int": res["beta_int"], "part_r2": res["part_r2"],
+                 "p": res["p"], "p_adj": None, "verdict": "no-interaction"}
+            inter.append(e)
+            ipvals.append((e["pair"], res["p"]))
+    if inter:
+        ibh = sc.benjamini_hochberg(ipvals, alpha=0.10)
+        for e in inter:
+            adj = ibh.get(e["pair"], {})
+            e["p_adj"] = (round(adj["p_adj"], 5)
+                          if adj.get("p_adj") is not None else None)
+            e["verdict"] = "candidate" if adj.get("reject") else "no-interaction"
+        inter.sort(key=lambda e: (e["p_adj"] if e["p_adj"] is not None else 1.0))
+    models["interactions_2way"] = inter
+    models["method_notes"].append(
+        "Two-way interactions on complexity are screened per knob pair with a "
+        "moving-block Freedman-Lane permutation test (autocorrelation-preserving) "
+        "over all %d pairs, FDR-corrected. Because the knobs are themselves "
+        "autocorrelated (one changed at a time), these are flagged as CANDIDATES "
+        "for controlled follow-up, not confirmed interactions — the univariate "
+        "analysis cannot see them at all, but confirming them needs a targeted "
+        "A/B run (cf. H0008)." % len(inter))
+
     # recipe for big cells
     models["recipe"] = _recipe(rows, "complexity")
     return models
@@ -337,10 +393,14 @@ def _verdict_badge(verdict):
     colors = {"significant": "#4ade80", "significant-nonlinear": "#a78bfa",
               "likely": "#fbbf24", "chance": "#64748b", "no-effect": "#64748b",
               "causal-up": "#4ade80", "causal-down": "#f87171",
+              "interaction": "#4ade80", "no-interaction": "#64748b",
+              "candidate": "#38bdf8",
               "insufficient": "#475569"}
     label = {"significant": "REAL (FDR)", "significant-nonlinear": "nonlinear (FDR)",
              "likely": "likely", "chance": "chance", "no-effect": "no effect",
              "causal-up": "CAUSAL ↑", "causal-down": "CAUSAL ↓",
+             "interaction": "INTERACTION", "no-interaction": "none",
+             "candidate": "CANDIDATE",
              "insufficient": "too few"}.get(verdict, verdict)
     c = colors.get(verdict, "#64748b")
     return (f"<span style='background:{c}22;color:{c};border:1px solid {c}55;"
@@ -522,8 +582,50 @@ the outcome (complexity, novelty, ecology, cell count, biggest genome).</p></div
     else:
         parts.append("<div class='card muted'>Not enough complexity history yet for a "
                      "trend test.</div>")
+    # ---- interactions section: the answer to "univariate can't see H0008" ----
+    inter = models.get("interactions_2way", [])
+    parts.append("<h2>4 · Do two knobs matter <i>together</i>? (interaction candidates)</h2>")
+    parts.append("<p class='lede'>Everything above is one knob at a time — and the "
+                 "project's own key finding (H0008) says the real signal may live in "
+                 "<b>combinations</b>, not single levers. So each knob <b>pair</b> is "
+                 "tested for an interaction effect on complexity, controlling for both "
+                 "knobs' individual effects, with a <b>moving-block</b> permutation "
+                 "(preserves the run's autocorrelation) and FDR correction. Important "
+                 "honesty caveat: because the gardener changes one knob at a time, the "
+                 "knobs are themselves autocorrelated, which permutation only partly "
+                 "undoes — so a flag here is a <b>candidate for a controlled follow-up "
+                 "experiment</b>, not a confirmed interaction. This section generates "
+                 "hypotheses; it does not certify them.</p>")
+    hits = [e for e in inter if e["verdict"] == "candidate"]
+    if inter:
+        rows_i = ["<table class='corr'><tr><th>knob pair</th><th>interaction β</th>"
+                  "<th>extra R²</th><th>perm p (adj)</th><th>verdict</th></tr>"]
+        for e in inter[:10]:
+            padj = e.get("p_adj")
+            padj_s = "" if padj is None else f"{padj:.3f}"
+            pr2 = e.get("part_r2")
+            pr2_s = "" if pr2 is None else f"{pr2*100:.1f}%"
+            bi = e.get("beta_int")
+            bi_s = "" if bi is None else f"{bi:+.3f}"
+            rows_i.append(
+                f"<tr><td>{html.escape(e['pair'])}</td>"
+                f"<td>{bi_s}</td>"
+                f"<td class='muted'>{pr2_s}</td><td>{padj_s}</td>"
+                f"<td>{_verdict_badge(e['verdict'])}</td></tr>")
+        rows_i.append("</table>")
+        note = (f"<div style='margin-top:8px;color:#38bdf8;font-size:13px'>"
+                f"{len(hits)} interaction candidate(s) flagged — each needs a "
+                f"controlled A/B run to confirm.</div>" if hits
+                else "<div class='muted' style='margin-top:8px;font-size:13px'>"
+                "No knob pair shows even a candidate interaction yet — the univariate "
+                "nulls are not being rescued by a hidden pairwise effect (so far).</div>")
+        parts.append("<div class='card'>" + "".join(rows_i) + note + "</div>")
+    else:
+        parts.append("<div class='card muted'>Not enough data for interaction tests "
+                     "yet (need ≥20 experiments).</div>")
+
     # recipe section
-    parts.append("<h2>4 · Recipe for big cells (exploratory)</h2>")
+    parts.append("<h2>5 · Recipe for big cells (exploratory)</h2>")
     parts.append("<p class='lede'>Each condition split at its median into low vs. high; "
                  "the bar is the <b>lift</b> in mean complexity from low→high. Longer "
                  "green bar = pushing that condition up co-occurs with bigger cells. "
@@ -534,7 +636,7 @@ the outcome (complexity, novelty, ecology, cell count, biggest genome).</p></div
                  + "</div>")
 
     # regression detail
-    parts.append("<h2>5 · Linear models (complexity ~ condition)</h2>")
+    parts.append("<h2>6 · Linear models (complexity ~ condition)</h2>")
     parts.append("<p class='lede'>Univariate least-squares fit per condition. "
                  "Slope = complexity change per unit of the knob; R² = how much of "
                  "the variation the knob alone explains. Low R² everywhere means "
@@ -556,8 +658,9 @@ sample size and cross-checked with Spearman rank correlation; the whole test fam
 FDR-controlled (Benjamini–Hochberg, α=0.10). The causal layer uses paired
 before/after intervention deltas (Wilcoxon signed-rank + sign test, Cohen's d). Trend
 uses Mann–Kendall + Sen's slope, autocorrelation-deflated — not a fit to the peak
-envelope. Known limits: a single trajectory (n at the run level is 1), and the analysis
-is univariate, so it cannot see effects that live only in knob interactions. No external
+envelope. Two-way interactions are tested per knob pair with a Freedman–Lane permutation
+test, so effects that live only in knob combinations (cf. H0008) are not invisible.
+Known limit: this is a single trajectory (n at the run level is 1). No external
 libraries; fully reproducible. Regenerates on demand at <code>/report</code>.</p>
 <p class='muted'><a href='/'>← observatory</a> · <a href='/paper'>paper</a> · <a href='/deck'>deck</a></p>
 </div></body></html>""")
