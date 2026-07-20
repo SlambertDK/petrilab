@@ -21,3 +21,4 @@ data/backup/
 .vscode/
 
 v2/data/
+v2/data/observations.jsonl

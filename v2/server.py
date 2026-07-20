@@ -146,6 +146,10 @@ def _build_state():
             "falsification": _last_falsi,
             "gardener_log": gardener.log[-40:],
             "gardener": gardener.state(sim),
+            "analysis": {
+                "knobs": gardener.significance_report(),
+                "complexity_trend": gardener.complexity_trend(),
+            },
             "running": _running,
             "speed": _speed,
             "viewers": len(_viewers),
@@ -220,6 +224,27 @@ def paper():
         with open(path, encoding="utf-8") as f:
             return f.read()
     return "<h1>PetriLab</h1><p>paper.html not found</p>"
+
+
+@app.get("/report", response_class=HTMLResponse)
+def report():
+    """Live data-science report: rebuild models from the observation log on each
+    request so it always reflects the latest experiments."""
+    try:
+        import analytics
+        models = analytics.build_models()
+        return analytics.render_report(models)
+    except Exception as e:
+        return f"<h1>PetriLab report</h1><pre>report error: {str(e)}</pre>"
+
+
+@app.get("/api/report")
+def api_report():
+    try:
+        import analytics
+        return JSONResponse(analytics.build_models())
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 
 def main():

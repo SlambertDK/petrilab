@@ -31,6 +31,7 @@ Memory model (why this is a rebuild):
     including a clearly-marked '## ACTION NEEDED' block when it concludes
     something only an engine change (level A, which it may never make) could fix.
 """
+import json
 import math
 import os
 import random
@@ -66,7 +67,8 @@ class Gardener:
         # sum   : running sum of deltas -> durable total effect for reporting
         # last  : last observed delta
         self.knob_stats = {
-            k: {"mean": self.OPTIMISTIC_INIT, "count": 0, "sum": 0.0, "last": 0.0}
+            k: {"mean": self.OPTIMISTIC_INIT, "count": 0, "sum": 0.0, "last": 0.0,
+                "amean": 0.0, "m2": 0.0, "acount": 0}
             for k in self.KNOBS
         }
         self.last_score = None
@@ -77,8 +79,17 @@ class Gardener:
         self.reheat_seen = 0          # count of reheats observed (for conclusions)
         self._last_last_event = None  # dedup engine last_event across ticks
         self.stuck_since_gen = None   # first gen verdict became non-success
+        # rolling record of (gen, complexity) to detect whether peaks GROW over time
+        # (real accumulation, Wolfram class 4) or merely REPEAT (oscillation, class 2)
+        self.cplx_history = []        # list of [gen, complexity], capped
+        self.CPLX_HISTORY_MAX = 240
         self.findings_path = findings_path or os.path.join(
             os.path.dirname(__file__), "data", "findings.md")
+        # data-science observation log: one JSON row per resolved experiment
+        # (knob touched + its value -> the outcome variables at that moment).
+        # This is the dataset the models are trained on.
+        self.observations_path = os.path.join(
+            os.path.dirname(self.findings_path), "observations.jsonl")
 
     # ---- backward-compat view: some UI code reads knob_credit ----
     @property
@@ -109,6 +120,13 @@ class Gardener:
         gen = sim.generation
         score = self._score(modes_rec)
 
+        # record complexity for trend analysis (growing peaks vs. mere oscillation)
+        cx = modes_rec.get("complexity")
+        if cx is not None:
+            self.cplx_history.append([gen, float(cx)])
+            if len(self.cplx_history) > self.CPLX_HISTORY_MAX:
+                self.cplx_history = self.cplx_history[-self.CPLX_HISTORY_MAX:]
+
         # track how long the verdict has been unresolved/failing (for ACTION NEEDED)
         if falsi.get("verdict") == "success":
             self.stuck_since_gen = None
@@ -130,12 +148,13 @@ class Gardener:
                 self.phase = "measure"      # step 3: gathering the effect
                 self.last_score = score
                 return
-            # age >= 2 -> step 4: LEARN (keep or revert)
+            # step 4: LEARN (keep or revert)
             base = self.pending["baseline_score"]
             delta = score - base
             knob = self.pending["knob"]
             self._record_effect(knob, delta)
             self.experiments_run += 1
+            self._log_observation(sim, modes_rec, falsi, knob, base, score, delta)
             if delta > 0.01:
                 self._logi(gen, f"KEEP {knob}={round(getattr(sim, knob),3)}",
                            f"score {round(base,3)}->{round(score,3)} (+{round(delta,3)})")
@@ -195,6 +214,12 @@ class Gardener:
         s["count"] += 1
         s["sum"] += delta
         s["last"] = delta
+        # Welford online mean/variance of the raw deltas (for significance testing:
+        # is this knob's average effect real, or just noise around zero?)
+        s["acount"] += 1
+        d0 = delta - s["amean"]
+        s["amean"] += d0 / s["acount"]
+        s["m2"] += d0 * (delta - s["amean"])
         if s["count"] == 1:
             # first real observation replaces the optimistic prior
             s["mean"] = delta
@@ -221,6 +246,137 @@ class Gardener:
         return self.rng.choices(knobs, weights=weights, k=1)[0]
 
     # ---------------------------------------------------------------
+    def _significance(self, s):
+        """Decide whether a knob's average effect is a real signal or just noise,
+        using a one-sample t-test against the null 'effect = 0'.
+
+        t = mean / (sd / sqrt(n)).  |t| > ~2.6 -> <1% chance the effect is noise
+        (correlates); |t| > ~2.0 -> <5% (likely real); otherwise the sign is not
+        distinguishable from random drift, no matter how many trials. This is the
+        difference between 'this knob correlates with success' and 'this knob's
+        average just happens to be slightly off zero'."""
+        n = s["count"]
+        if n < 8:
+            return f"too few trials (n={n})"
+        na = s.get("acount", 0)
+        if na < 8:
+            return f"variance still warming up (n={na})"
+        var = s["m2"] / (na - 1) if na > 1 else 0.0
+        sd = math.sqrt(var)
+        if sd < 1e-12:
+            return "no variance (degenerate)"
+        se = sd / math.sqrt(na)
+        t = s["amean"] / se
+        direction = "helps" if s["amean"] > 0 else "hurts"
+        if abs(t) >= 2.58:
+            return f"SIGNIFICANT: {direction} (t={t:+.1f}, p<0.01) — real correlation"
+        if abs(t) >= 1.96:
+            return f"likely {direction} (t={t:+.1f}, p<0.05)"
+        return f"not distinguishable from chance (t={t:+.1f})"
+
+    def complexity_trend(self):
+        """Are complexity peaks GROWING over time (real accumulation, class 4) or
+        just REPEATING (oscillation, class 2)? Fit a least-squares line to the
+        upper envelope (top-quartile points) of recent complexity history and
+        report its slope and correlation. A clearly positive slope with decent
+        fit = peaks are climbing = accumulation. Slope ~0 = the same high notes,
+        replayed = oscillation."""
+        h = self.cplx_history
+        if len(h) < 24:
+            return {"verdict": "insufficient", "n": len(h)}
+        vals = [c for _, c in h]
+        thr = sorted(vals)[int(len(vals) * 0.75)]      # top quartile = the peaks
+        pts = [(g, c) for g, c in h if c >= thr]
+        if len(pts) < 6:
+            return {"verdict": "insufficient", "n": len(pts)}
+        n = len(pts)
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        mx = sum(xs) / n
+        my = sum(ys) / n
+        sxx = sum((x - mx) ** 2 for x in xs)
+        sxy = sum((x - mx) * (y - my) for x, y in zip(xs, ys))
+        syy = sum((y - my) ** 2 for y in ys)
+        if sxx < 1e-9 or syy < 1e-9:
+            return {"verdict": "flat", "slope": 0.0, "r": 0.0, "n": n}
+        slope = sxy / sxx
+        r = sxy / math.sqrt(sxx * syy)
+        span = xs[-1] - xs[0]
+        rise = slope * span                             # peak growth across the window
+        rel = rise / my if my else 0.0                  # growth relative to peak height
+        if r >= 0.35 and rel > 0.12:
+            verdict = "peaks GROWING — accumulation (class-4-like)"
+        elif r <= -0.35 and rel < -0.12:
+            verdict = "peaks SHRINKING — decaying"
+        else:
+            verdict = "peaks REPEATING — oscillation (class-2-like)"
+        return {"verdict": verdict, "slope": round(slope, 6), "r": round(r, 2),
+                "peak_growth_pct": round(rel * 100, 1), "n": n}
+
+    def significance_report(self):
+        """Machine-readable version for the dashboard / API: per-knob t-stat and verdict."""
+        out = {}
+        for k, s in self.knob_stats.items():
+            n = s["count"]
+            na = s.get("acount", 0)
+            if n < 8 or na < 8:
+                out[k] = {"n": n, "vn": na, "t": None, "verdict": "insufficient"}
+                continue
+            var = s["m2"] / (na - 1) if na > 1 else 0.0
+            sd = math.sqrt(var)
+            se = sd / math.sqrt(na) if sd > 1e-12 else None
+            t = (s["amean"] / se) if se else None
+            if t is None:
+                verdict = "degenerate"
+            elif abs(t) >= 2.58:
+                verdict = "significant"
+            elif abs(t) >= 1.96:
+                verdict = "likely"
+            else:
+                verdict = "chance"
+            out[k] = {"n": n, "vn": na, "mean": round(s["amean"], 5),
+                      "t": (round(t, 2) if t is not None else None), "verdict": verdict}
+        return out
+
+    def _log_observation(self, sim, modes_rec, falsi, knob, base, score, delta):
+        """Append one experiment row to observations.jsonl — the training set for
+        the models. Captures the knob that was moved and its value, all the knob
+        settings at the time, and the outcome variables (the MODES axes, cell
+        count, biggest cell, falsification verdict). Never raises."""
+        try:
+            row = {
+                "gen": sim.generation,
+                "exp": self.experiments_run,
+                "knob": knob,
+                "knob_value": round(float(getattr(sim, knob, 0.0)), 5),
+                # full condition vector at decision time (features)
+                "conditions": {k: round(float(getattr(sim, k, 0.0)), 5)
+                               for k in self.KNOBS},
+                # outcome variables (targets)
+                "novelty": modes_rec.get("novelty"),
+                "complexity": modes_rec.get("complexity"),
+                "ecology": modes_rec.get("ecology"),
+                "change": modes_rec.get("change"),
+                "cells": len(getattr(sim, "cells", {}) or {}),
+                "lineages": len(sim.lineage_census()) if hasattr(sim, "lineage_census") else None,
+                "max_genome": self._max_genome(sim),
+                "score": round(score, 5),
+                "delta": round(delta, 5),
+                "verdict": falsi.get("verdict"),
+            }
+            os.makedirs(os.path.dirname(self.observations_path), exist_ok=True)
+            with open(self.observations_path, "a") as f:
+                f.write(json.dumps(row) + "\n")
+        except Exception as e:
+            self._logi(sim.generation, "OBS-LOG-ERROR", str(e)[:120])
+
+    @staticmethod
+    def _max_genome(sim):
+        try:
+            return max((len(c.genome) for c in sim.cells.values()), default=0)
+        except Exception:
+            return 0
+
     def _write_conclusions(self, sim, modes_rec, falsi):
         """Distil many experiments into durable, dated conclusions appended to
         findings.md. Also emits an ACTION NEEDED block when the gardener hits a
@@ -240,20 +396,26 @@ class Gardener:
 
             # rank knobs by durable mean effect
             ranked = sorted(self.knob_stats.items(), key=lambda kv: -kv[1]["mean"])
-            lines.append("- knob mean effect (EWMA of delta over trials):")
+            lines.append("- knob effect (does it correlate, or is it chance?):")
             for k, s in ranked:
                 if s["count"] == 0:
                     lines.append(f"    - {k}: untried")
                     continue
-                verdict = ("consistently helps" if s["mean"] > 0.01 else
-                           "consistently hurts" if s["mean"] < -0.01 else
-                           "neutral")
+                verdict = self._significance(s)
                 lines.append(f"    - {k}: mean {s['mean']:+.4f} over "
                              f"{s['count']} trials -> {verdict}")
 
             if self.reheat_seen:
                 lines.append(f"- engine reheating fired {self.reheat_seen}x "
                              f"(anti-stagnation triggered)")
+
+            # pattern detection: are the big-complexity moments accumulating or repeating?
+            tr = self.complexity_trend()
+            if tr.get("verdict") not in ("insufficient",):
+                extra = ""
+                if tr.get("r") is not None and "peak_growth_pct" in tr:
+                    extra = f" (r={tr['r']}, peak growth {tr['peak_growth_pct']}% over window)"
+                lines.append(f"- complexity peaks: {tr['verdict']}{extra}")
 
             if self.stuck_since_gen is not None:
                 stuck_for = gen - self.stuck_since_gen
@@ -356,6 +518,7 @@ class Gardener:
             "last_conclusion_at": self.last_conclusion_at,
             "reheat_seen": self.reheat_seen,
             "stuck_since_gen": self.stuck_since_gen,
+            "cplx_history": self.cplx_history[-self.CPLX_HISTORY_MAX:],
             "last_score": self.last_score,
             "cooldown": self.cooldown,
             "phase": self.phase,
@@ -376,11 +539,15 @@ class Gardener:
                     "count": int(s.get("count", 0)),
                     "sum": float(s.get("sum", 0.0)),
                     "last": float(s.get("last", 0.0)),
+                    "amean": float(s.get("amean", 0.0)),
+                    "m2": float(s.get("m2", 0.0)),
+                    "acount": int(s.get("acount", 0)),
                 }
         self.experiments_run = int(d.get("experiments_run", 0))
         self.last_conclusion_at = int(d.get("last_conclusion_at", 0))
         self.reheat_seen = int(d.get("reheat_seen", 0))
         self.stuck_since_gen = d.get("stuck_since_gen", None)
+        self.cplx_history = d.get("cplx_history", []) or []
         self.last_score = d.get("last_score", None)
         self.cooldown = int(d.get("cooldown", 0))
         self.phase = d.get("phase", "idle")
