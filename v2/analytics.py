@@ -27,6 +27,7 @@ import math
 import os
 import html
 from datetime import datetime, timezone
+import stats_core as sc
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OBS_PATH = os.path.join(HERE, "data", "observations.jsonl")
@@ -154,10 +155,13 @@ def build_models(path=OBS_PATH):
         "n_observations": n,
         "generated_utc": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
         "gen_range": None,
-        "correlations": {},   # outcome -> [{knob, r, n, t, verdict}]
+        "correlations": {},   # outcome -> [{knob, r, rho, n, neff, t, p, p_adj, verdict}]
         "regressions": {},    # outcome -> {knob -> linreg}
         "recipe": [],         # knob lift toward complexity
+        "interventions": [],  # per-knob paired-delta causal tests (the strong evidence)
+        "trend": {},          # Mann-Kendall on complexity over time
         "outcome_summary": {},
+        "method_notes": [],
     }
     if n == 0:
         return models
@@ -175,23 +179,64 @@ def build_models(path=OBS_PATH):
                 "mean": round(m, 4), "min": round(min(col), 4),
                 "max": round(max(col), 4), "n": len(col)}
 
-    # correlation matrix + significance
+    # ---- correlation matrix, autocorrelation-corrected + FDR across the family ----
+    # Build every knob x outcome test first, collect p-values, THEN apply
+    # Benjamini-Hochberg once over the whole family (methodology 1.2 + 2.2).
+    raw = {}          # (oc, knob) -> entry dict
+    pvals = []        # [((oc,knob), p)]
     for oc in OUTCOMES:
         ys = _col(rows, oc)
-        entries = []
+        rho_y = sc.lag1_autocorr([v for v in ys if isinstance(v, (int, float))])
         for k in KNOBS:
             xs = _col(rows, k)
-            r, cnt = _pearson(xs, ys)
-            t, verdict = _r_significance(r, cnt)
-            entries.append({
-                "knob": k,
-                "r": (round(r, 3) if r is not None else None),
-                "n": cnt,
+            r, cnt = sc.pearson(xs, ys)
+            rho_x = sc.lag1_autocorr([v for v in xs if isinstance(v, (int, float))])
+            # use the larger autocorrelation of the two series (conservative)
+            rho = max(rho_x, rho_y)
+            t, dfe, p, ne = sc.corr_ttest_neff(r, cnt, rho)
+            sp, _ = sc.spearman(xs, ys)
+            entry = {
+                "knob": k, "r": (round(r, 3) if r is not None else None),
+                "rho_spearman": (round(sp, 3) if sp is not None else None),
+                "n": cnt, "neff": (round(ne, 1) if ne is not None else None),
+                "autocorr": round(rho, 3),
                 "t": (round(t, 2) if t is not None else None),
-                "verdict": verdict,
-            })
+                "p": (round(p, 5) if p is not None else None),
+                "p_adj": None, "verdict": "insufficient",
+            }
+            raw[(oc, k)] = entry
+            pvals.append(((oc, k), p))
+
+    bh = sc.benjamini_hochberg(pvals, alpha=0.10)
+    for key, entry in raw.items():
+        adj = bh.get(key, {})
+        entry["p_adj"] = (round(adj["p_adj"], 5)
+                          if adj.get("p_adj") is not None else None)
+        # verdict now reflects Pearson/Spearman concordance AND FDR survival
+        if entry["p"] is None:
+            entry["verdict"] = "insufficient"
+        elif adj.get("reject"):
+            # concordance check: linear + rank must agree in sign
+            r, sp = entry["r"], entry["rho_spearman"]
+            concord = (r is not None and sp is not None and (r > 0) == (sp > 0))
+            entry["verdict"] = "significant" if concord else "significant-nonlinear"
+        else:
+            entry["verdict"] = "chance"
+    for oc in OUTCOMES:
+        entries = [raw[(oc, k)] for k in KNOBS]
         entries.sort(key=lambda e: -(abs(e["r"]) if e["r"] is not None else -1))
         models["correlations"][oc] = entries
+
+    models["method_notes"] = [
+        "Correlation t-tests use the AR(1) effective sample size n_eff = "
+        "n(1-rho)/(1+rho), not raw n, so autocorrelation in the run cannot "
+        "manufacture significance.",
+        "All %d knob x outcome tests are corrected together with "
+        "Benjamini-Hochberg FDR at alpha=0.10 — a single 'significant' needs to "
+        "survive the whole family, not just its own p<0.05." % len(pvals),
+        "'significant' also requires Pearson and Spearman to agree in sign "
+        "(linear + rank concordance); otherwise it is flagged nonlinear.",
+    ]
 
     # regressions for headline outcomes
     for oc in ("complexity", "novelty", "score"):
@@ -203,6 +248,54 @@ def build_models(path=OBS_PATH):
             if lr:
                 reg[k] = {kk: round(vv, 6) for kk, vv in lr.items()}
         models["regressions"][oc] = reg
+
+    # ---- causal layer: per-knob paired intervention deltas (methodology 3) ----
+    # This is the STRONG evidence: each experiment is a real before/after nudge,
+    # and every delta (kept AND reverted) is logged, so there is no selection bias.
+    by_knob = {}
+    for r in rows:
+        k = r.get("knob")
+        d = r.get("delta")
+        if k in KNOBS and isinstance(d, (int, float)):
+            by_knob.setdefault(k, []).append(d)
+    iv = []
+    for k in KNOBS:
+        deltas = by_knob.get(k, [])
+        if len(deltas) < 6:
+            continue
+        w = sc.wilcoxon_signed(deltas)
+        st = sc.sign_test(deltas)
+        dz = sc.cohens_dz(deltas)
+        mean_d = sum(deltas) / len(deltas)
+        iv.append({
+            "knob": k, "n": len(deltas), "mean_delta": round(mean_d, 4),
+            "cohens_dz": (round(dz, 3) if dz is not None else None),
+            "wilcoxon_z": (round(w["z"], 2) if w["z"] is not None else None),
+            "wilcoxon_p": (round(w["p"], 5) if w["p"] is not None else None),
+            "sign_p": (round(st["p"], 5) if st["p"] is not None else None),
+            "p": w["p"], "p_adj": None, "verdict": "insufficient",
+        })
+    # FDR across the intervention family too
+    ivbh = sc.benjamini_hochberg([(e["knob"], e["p"]) for e in iv], alpha=0.10)
+    for e in iv:
+        adj = ivbh.get(e["knob"], {})
+        e["p_adj"] = (round(adj["p_adj"], 5) if adj.get("p_adj") is not None else None)
+        if e["p"] is None:
+            e["verdict"] = "insufficient"
+        elif adj.get("reject"):
+            e["verdict"] = "causal-up" if e["mean_delta"] > 0 else "causal-down"
+        else:
+            e["verdict"] = "no-effect"
+    iv.sort(key=lambda e: -(abs(e["mean_delta"])))
+    models["interventions"] = iv
+
+    # ---- robust trend on complexity over time (methodology 6) ----
+    cx_series = [r.get("complexity") for r in rows
+                 if isinstance(r.get("complexity"), (int, float))]
+    mk = sc.mann_kendall(cx_series)
+    mk["sens_slope"] = (round(sc.sens_slope(cx_series), 5)
+                        if sc.sens_slope(cx_series) is not None else None)
+    models["trend"] = mk
 
     # recipe for big cells
     models["recipe"] = _recipe(rows, "complexity")
@@ -241,29 +334,37 @@ def _bar_chart(items, value_key, label_key, width=560, row_h=30,
 
 
 def _verdict_badge(verdict):
-    colors = {"significant": "#4ade80", "likely": "#fbbf24",
-              "chance": "#64748b", "insufficient": "#475569"}
-    label = {"significant": "REAL (p&lt;0.01)", "likely": "likely (p&lt;0.05)",
-             "chance": "chance", "insufficient": "too few"}.get(verdict, verdict)
+    colors = {"significant": "#4ade80", "significant-nonlinear": "#a78bfa",
+              "likely": "#fbbf24", "chance": "#64748b", "no-effect": "#64748b",
+              "causal-up": "#4ade80", "causal-down": "#f87171",
+              "insufficient": "#475569"}
+    label = {"significant": "REAL (FDR)", "significant-nonlinear": "nonlinear (FDR)",
+             "likely": "likely", "chance": "chance", "no-effect": "no effect",
+             "causal-up": "CAUSAL ↑", "causal-down": "CAUSAL ↓",
+             "insufficient": "too few"}.get(verdict, verdict)
     c = colors.get(verdict, "#64748b")
     return (f"<span style='background:{c}22;color:{c};border:1px solid {c}55;"
             f"border-radius:6px;padding:1px 7px;font-size:11px'>{label}</span>")
 
 
 def _corr_table(entries):
-    rows = ["<table class='corr'><tr><th>condition</th><th>r</th><th>t</th>"
-            "<th>verdict</th><th></th></tr>"]
+    rows = ["<table class='corr'><tr><th>condition</th><th>r</th><th>ρ</th>"
+            "<th>n→n_eff</th><th>p(adj)</th><th>verdict</th></tr>"]
     for e in entries:
         r = e["r"]
-        bar_w = int(abs(r) * 80) if r is not None else 0
         c = "#4ade80" if (r or 0) >= 0 else "#f87171"
+        neff = e.get("neff")
+        nn = f"{e['n']}→{neff:.0f}" if neff is not None else str(e["n"])
+        padj = e.get("p_adj")
+        padj_s = "" if padj is None else f"{padj:.3f}"
+        sp = e.get("rho_spearman")
         rows.append(
             f"<tr><td>{html.escape(e['knob'])}</td>"
-            f"<td>{'' if r is None else f'{r:+.3f}'}</td>"
-            f"<td>{'' if e['t'] is None else e['t']}</td>"
-            f"<td>{_verdict_badge(e['verdict'])}</td>"
-            f"<td><span style='display:inline-block;width:{bar_w}px;height:8px;"
-            f"background:{c};border-radius:3px'></span></td></tr>")
+            f"<td style='color:{c}'>{'' if r is None else f'{r:+.3f}'}</td>"
+            f"<td>{'' if sp is None else f'{sp:+.2f}'}</td>"
+            f"<td class='muted'>{nn}</td>"
+            f"<td>{padj_s}</td>"
+            f"<td>{_verdict_badge(e['verdict'])}</td></tr>")
     rows.append("</table>")
     return "".join(rows)
 
@@ -275,7 +376,8 @@ def render_report(models):
 
     # headline: what correlates with complexity (the "big cells")
     cplx = models["correlations"].get("complexity", [])
-    strongest = next((e for e in cplx if e["verdict"] in ("significant", "likely")), None)
+    strongest = next((e for e in cplx if e["verdict"] in
+                      ("significant", "significant-nonlinear")), None)
 
     parts = [f"""<!doctype html><html lang='en'><head><meta charset='utf-8'>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
@@ -351,17 +453,88 @@ the outcome (complexity, novelty, ecology, cell count, biggest genome).</p></div
         if ent:
             parts.append(f"<div class='card'><b>outcome: {oc}</b>{_corr_table(ent)}</div>")
 
+    # method notes (honesty box)
+    notes = models.get("method_notes", [])
+    if notes:
+        parts.append("<div class='card' style='border-color:#3b2f1a;background:#171207'>"
+                     "<b style='color:#fbbf24'>How significance is judged</b><ul class='muted' "
+                     "style='margin:8px 0 0;padding-left:18px;font-size:12.5px'>"
+                     + "".join(f"<li>{html.escape(x)}</li>" for x in notes)
+                     + "</ul></div>")
+
+    # ---- causal section: the intervention deltas (the strong evidence) ----
+    iv = models.get("interventions", [])
+    parts.append("<h2>2 · Does pushing a knob actually cause a change?</h2>")
+    parts.append("<p class='lede'>Correlation can be confounded. But the gardener runs "
+                 "<b>real interventions</b>: it nudges one knob, measures the score "
+                 "before and after, and logs the change — <i>including the ones it "
+                 "reverts</i>. A paired test on those before/after deltas is genuine "
+                 "causal evidence, not just association. Wilcoxon signed-rank + sign "
+                 "test, FDR-corrected, with Cohen's d effect size.</p>")
+    if iv:
+        rows = ["<table class='corr'><tr><th>knob nudged</th><th>n</th>"
+                "<th>mean Δscore</th><th>Cohen's d</th><th>Wilcoxon p</th>"
+                "<th>verdict</th></tr>"]
+        for e in iv:
+            md = e["mean_delta"]
+            c = "#4ade80" if md >= 0 else "#f87171"
+            wp = e.get("wilcoxon_p")
+            dz = e.get("cohens_dz")
+            dz_s = "" if dz is None else f"{dz:+.2f}"
+            wp_s = "" if wp is None else f"{wp:.4f}"
+            rows.append(
+                f"<tr><td>{html.escape(e['knob'])}</td><td class='muted'>{e['n']}</td>"
+                f"<td style='color:{c}'>{md:+.4f}</td>"
+                f"<td>{dz_s}</td>"
+                f"<td>{wp_s}</td>"
+                f"<td>{_verdict_badge(e['verdict'])}</td></tr>")
+        rows.append("</table>")
+        parts.append("<div class='card'>" + "".join(rows) + "</div>")
+    else:
+        parts.append("<div class='card muted'>Not enough per-knob interventions yet "
+                     "(need ≥6 nudges per knob). Filling up as the gardener runs.</div>")
+
+    # ---- trend section: Mann-Kendall (replaces peak-envelope OLS) ----
+    tr = models.get("trend", {})
+    parts.append("<h2>3 · Is complexity accumulating, or just oscillating?</h2>")
+    parts.append("<p class='lede'>The central question: are the complexity peaks "
+                 "<b>climbing over time</b> (real open-ended accumulation, class 4) or "
+                 "just <b>repeating</b> (a bounded cycle, class 2)? Tested with the "
+                 "Mann–Kendall trend test + Sen's slope — nonparametric, robust to "
+                 "outliers, and deflated for autocorrelation. (We deliberately do "
+                 "<i>not</i> fit a line to the peak envelope; that always looks like a "
+                 "rising trend even for pure oscillation.)</p>")
+    if tr.get("trend") in ("rising", "falling", "no-trend"):
+        tv = tr["trend"]
+        tcolor = {"rising": "#4ade80", "falling": "#f87171",
+                  "no-trend": "#fbbf24"}.get(tv, "#64748b")
+        tlabel = {"rising": "ACCUMULATING (rising trend)",
+                  "falling": "declining",
+                  "no-trend": "OSCILLATION (no monotone trend)"}.get(tv, tv)
+        parts.append(
+            f"<div class='card'><div style='font-size:16px;color:{tcolor};"
+            f"font-weight:600;margin-bottom:6px'>{tlabel}</div>"
+            f"<div class='muted' style='font-size:12.5px;font-family:ui-monospace,monospace'>"
+            f"Mann–Kendall z (autocorr-corrected) = {tr.get('z_ac')} · "
+            f"p = {tr.get('p_ac')} · Sen's slope = {tr.get('sens_slope')} "
+            f"complexity/experiment · lag-1 autocorr ρ = {tr.get('rho')} · "
+            f"n = {tr.get('n')}</div></div>")
+    else:
+        parts.append("<div class='card muted'>Not enough complexity history yet for a "
+                     "trend test.</div>")
     # recipe section
-    parts.append("<h2>2 · Recipe for big cells</h2>")
+    parts.append("<h2>4 · Recipe for big cells (exploratory)</h2>")
     parts.append("<p class='lede'>Each condition split at its median into low vs. high; "
                  "the bar is the <b>lift</b> in mean complexity from low→high. Longer "
-                 "green bar = pushing that condition up co-occurs with bigger cells.</p>")
+                 "green bar = pushing that condition up co-occurs with bigger cells. "
+                 "This is a coarse first pass — the causal test above is the stronger "
+                 "evidence; treat these bars as leads, not conclusions.</p>")
     parts.append("<div class='card'>"
                  + _bar_chart(models["recipe"], "lift", "knob", fmt="{:+.2f}")
                  + "</div>")
 
     # regression detail
-    parts.append("<h2>3 · Linear models (complexity ~ condition)</h2>")
+    parts.append("<h2>5 · Linear models (complexity ~ condition)</h2>")
     parts.append("<p class='lede'>Univariate least-squares fit per condition. "
                  "Slope = complexity change per unit of the knob; R² = how much of "
                  "the variation the knob alone explains. Low R² everywhere means "
@@ -375,12 +548,17 @@ the outcome (complexity, novelty, ecology, cell count, biggest genome).</p></div
     reg_rows.append("</table>")
     parts.append("<div class='card'>" + "".join(reg_rows) + "</div>")
 
-    parts.append(f"""<h2>Method</h2><p class='muted'>Every number above is computed
-directly from <code>data/observations.jsonl</code> ({n:,} rows), one row per
-resolved gardener experiment. Correlation = Pearson r; significance = t-test
-t=r·√((n−2)/(1−r²)) with thresholds |t|≥1.96 (p&lt;0.05) and |t|≥2.58 (p&lt;0.01).
-Regression = ordinary least squares. No external libraries, fully reproducible.
-The report regenerates on demand at <code>/report</code>.</p>
+    parts.append(f"""<h2>Method &amp; threats to validity</h2><p class='muted'>Every number
+above is computed directly from <code>data/observations.jsonl</code> ({n:,} rows), one
+row per resolved gardener experiment (kept <i>and</i> reverted, so there is no
+selection bias). Correlations are autocorrelation-corrected via the AR(1) effective
+sample size and cross-checked with Spearman rank correlation; the whole test family is
+FDR-controlled (Benjamini–Hochberg, α=0.10). The causal layer uses paired
+before/after intervention deltas (Wilcoxon signed-rank + sign test, Cohen's d). Trend
+uses Mann–Kendall + Sen's slope, autocorrelation-deflated — not a fit to the peak
+envelope. Known limits: a single trajectory (n at the run level is 1), and the analysis
+is univariate, so it cannot see effects that live only in knob interactions. No external
+libraries; fully reproducible. Regenerates on demand at <code>/report</code>.</p>
 <p class='muted'><a href='/'>← observatory</a> · <a href='/paper'>paper</a> · <a href='/deck'>deck</a></p>
 </div></body></html>""")
     return "".join(parts)

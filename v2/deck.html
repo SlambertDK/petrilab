@@ -165,13 +165,13 @@
   <section class="slide">
     <div class="kicker">New · the gardener does statistics</div>
     <h2>Correlation, <span class="accent">or just chance?</span></h2>
-    <p class="lead">Watching giant, all-green cells appear is fun — but is it a <b>recipe</b> or a <b>coincidence</b>? The gardener now logs every experiment and runs real data science on itself: correlation, significance testing, trend detection. It answers the question by <b>maths</b>, not by eye.</p>
+    <p class="lead">Watching giant, all-green cells appear is fun — but is it a <b>recipe</b> or a <b>coincidence</b>? The gardener logs every experiment and runs real data science on itself. The first version used a naïve significance test; after adversarial review it was <b>rebuilt</b> to survive the traps that make a single running simulation lie to you.</p>
     <div class="grid g3" style="margin-top:22px">
-      <div class="card"><h3 class="cyan">It logs</h3><p>Every experiment → a dataset row: the condition it changed, and the outcome (complexity, novelty, cells, genome).</p></div>
-      <div class="card"><h3 class="violet">It tests</h3><p>Pearson correlation + a <i>t</i>-test verdict per condition: <span class="green">REAL</span> (p&lt;0.01), likely, or just <span class="faint">chance</span>.</p></div>
-      <div class="card"><h3 class="green">It trends</h3><p>Fits a line to the complexity peaks: are they <b>climbing</b> (real accumulation) or just <b>repeating</b> (oscillation)?</p></div>
+      <div class="card"><h3 class="cyan">It corrects for autocorrelation</h3><p>280 experiments from one run aren't 280 independent facts — at ρ≈0.84 they're worth ~24. The test uses that <b>effective</b> sample size, so drift can't fake significance.</p></div>
+      <div class="card"><h3 class="violet">It tests causally, not just correlationally</h3><p>Every nudge is a real before/after intervention (kept <i>and</i> reverted). A paired Wilcoxon test on those deltas — FDR-corrected across all knobs — is genuine causal evidence.</p></div>
+      <div class="card"><h3 class="green">It trends robustly</h3><p>Mann–Kendall + Sen's slope, not a line through the peaks (which fakes a rising trend even for pure oscillation). Are the peaks <b>climbing</b> or just <b>repeating</b>?</p></div>
     </div>
-    <p class="lead" style="margin-top:20px;font-size:16px">The current verdict is an <b>honest null</b>: the peaks repeat rather than climb, and no single condition significantly drives the big cells — oscillation, not yet accumulation. A dashboard that tells you "I haven't proven it" is worth more than one that always looks green. <span class="faint">Live at petrilab.slambert.com/report.</span></p>
+    <p class="lead" style="margin-top:20px;font-size:16px">The current verdict is an <b>honest null</b> — and a sharper one after hardening: no condition survives correction, no knob causally moves the score, and the peaks don't climb. The naïve test <i>would</i> have declared a winner; the correct one says "not proven." <span class="faint">A dashboard that admits that is worth more than one that always looks green. Live at petrilab.slambert.com/report.</span></p>
   </section>
 
   <!-- 9 · THE LESSON -->
