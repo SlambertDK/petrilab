@@ -124,6 +124,9 @@
   .queue .q{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--dim);padding:4px 8px;border:1px dashed var(--line);border-radius:6px}
   .queue .q .n{color:var(--faint)}
   .queue .empty,.verdicts .empty{font-size:11px;color:var(--faint);font-style:italic}
+  .qsrc{font-size:8px;padding:1px 5px;border-radius:20px;font-weight:700;letter-spacing:.5px;margin-right:5px;vertical-align:middle}
+  .qsrc.theory{background:rgba(167,139,250,.18);color:#a78bfa}
+  .qsrc.data{background:rgba(56,189,248,.14);color:var(--cyan)}
   .verdicts{display:flex;flex-direction:column;gap:5px}
   .verdicts .vd{display:flex;flex-direction:column;gap:2px;padding:6px 9px;border-radius:7px;border:1px solid var(--line)}
   .verdicts .vd .top{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11px}
@@ -487,6 +490,7 @@ function renderGardener(){
       return `<div class="cell ${isOn?'on':''}">${c.toUpperCase()}</div>`;
     }).join('');
     $('testnow').innerHTML=`<div class="pair">${active.a} × ${active.b}</div>
+      ${active.source==='theory'&&active.rationale?`<div class="meta" style="color:#a78bfa;margin:2px 0 6px"><b>THEORY:</b> ${active.rationale}</div>`:''}
       <div class="cells">${cellsHtml}</div>
       <div class="pbar"><i style="width:${Math.round((active.frac||0)*100)}%"></i></div>
       <div class="meta">Varying <b>both</b> knobs across 4 cells (lo/hi × lo/hi), replicate ${active.rep+1}/${active.replicates}.
@@ -498,7 +502,9 @@ function renderGardener(){
 
   // ① QUEUE — candidates waiting
   const q=(H.queued||[]);
-  $('queue').innerHTML=q.length?q.map((e,i)=>`<div class="q"><span>${e.a} × ${e.b}</span><span class="n">#${i+1} queued</span></div>`).join('')
+  const srcBadge=s=>s==='theory'?'<span class="qsrc theory">THEORY</span>':'<span class="qsrc data">DATA</span>';
+  $('queue').innerHTML=q.length?q.map((e,i)=>`<div class="q" title="${(e.rationale||'').replace(/"/g,'&quot;')}">
+    <span>${srcBadge(e.source)} ${e.a} × ${e.b}</span><span class="n">#${i+1} queued</span></div>`).join('')
     : `<div class="empty">Queue empty — the report hasn't flagged new candidate interactions since the last sweep.</div>`;
 
   // ③ VERDICTS — concluded tests
@@ -508,7 +514,7 @@ function renderGardener(){
   $('verdicts').innerHTML=arch.length?arch.map(a=>{
     const b=badge[a.verdict]||['—','vb-no'];
     const eff=a.effect==null?'—':a.effect, p=a.p==null?'—':a.p;
-    return `<div class="vd"><div class="top"><span class="pair">${a.a} × ${a.b}</span>
+    return `<div class="vd"><div class="top"><span class="pair">${srcBadge(a.source)} ${a.a} × ${a.b}</span>
       <span class="badge ${b[1]}">${b[0]}</span></div>
       <div class="why">interaction effect ${eff} · p=${p} · ${a.rep} controlled replicates</div></div>`;
   }).join('') : `<div class="empty">No controlled tests concluded yet — the first 2×2 experiment is still running or pending.</div>`;

@@ -41,15 +41,59 @@ TESTING = "testing"
 CONCLUDED = "concluded"
 
 
+# ---------------------------------------------------------------------------
+# THEORY-DRIVEN hypotheses: knob pairs where there is a mechanistic reason to
+# expect the effect of one knob on complexity to DEPEND on the other's level.
+# These are seeded a priori (not because the data flagged them) and tested with
+# the SAME controlled 2x2 that falsifies the data-driven candidates — so we can
+# honestly compare whether reasoned predictions survive better than blind
+# screening. Each is a genuine, directional prediction, not a fishing expedition.
+THEORY_PAIRS = [
+    ("mutation_rate", "structural_heredity",
+     "Mutation supplies variation; structural heredity decides how much survives "
+     "to the next generation. High mutation should only build complexity when "
+     "heredity is high enough to retain the good structure — otherwise it washes "
+     "out. Classic error-threshold / heritability interaction."),
+    ("energy_influx", "signaling",
+     "Signalling is metabolically expensive. Multicellular coordination (the route "
+     "to complexity) should pay off only when energy influx is high enough to "
+     "afford it; under scarcity, signalling is pure cost. Energy should gate the "
+     "signalling benefit."),
+    ("mutation_rate", "gene_mut_rate",
+     "Two mutation channels acting on the same genome. Their effects should be "
+     "sub-additive (redundant) or super-additive (compounding) rather than "
+     "independent — total mutational load, not either alone, likely drives the "
+     "error-catastrophe boundary."),
+    ("seasons", "structural_heredity",
+     "Seasonal change rewards adaptability; structural heredity rewards stability. "
+     "These pull in opposite directions, so the complexity payoff of one should "
+     "depend on the level of the other — a stability-vs-adaptability trade-off."),
+    ("energy_influx", "mutation_rate",
+     "Energy sets carrying capacity and thus effective population size; population "
+     "size sets how strongly selection can purge deleterious mutations. The same "
+     "mutation rate should behave very differently under abundance vs scarcity."),
+    ("season_len", "seasons",
+     "Amplitude (seasons) and period (season_len) of environmental change jointly "
+     "define the selective regime. Fast+large vs slow+large are different worlds, "
+     "so their effects on complexity should not simply add."),
+]
+
+
 class FactorialExperiment:
     """A 2x2 controlled interaction test for one knob pair, driven cell by cell."""
 
     CELLS = ("ll", "hl", "lh", "hh")
 
     def __init__(self, knob_a, knob_b, bounds_a, bounds_b,
-                 replicates=3, settle_ticks=1):
+                 replicates=3, settle_ticks=1, source="report", rationale=""):
         self.a = knob_a
         self.b = knob_b
+        # where this hypothesis came from: "report" = data-driven candidate flagged
+        # by the interaction screen; "theory" = mechanistic prediction seeded a priori.
+        # The 2x2 test falsifies both identically — tagging just lets us honestly
+        # compare whether theory-driven guesses survive better than blind screening.
+        self.source = source
+        self.rationale = rationale
         # low/high levels for each knob: use the tunable range's inner quartiles
         # so we probe a real contrast without slamming into the bounds.
         lo_a, hi_a = bounds_a
@@ -176,6 +220,7 @@ class FactorialExperiment:
         return {
             "pair": self.pair,
             "a": self.a, "b": self.b,
+            "source": self.source, "rationale": self.rationale,
             "state": self.state,
             "cell": self.current_cell if self.state == TESTING else None,
             "rep": self.rep, "replicates": self.replicates,
@@ -190,6 +235,7 @@ class FactorialExperiment:
     def to_dict(self):
         return {
             "a": self.a, "b": self.b,
+            "source": self.source, "rationale": self.rationale,
             "level_a": self.level_a, "level_b": self.level_b,
             "replicates": self.replicates, "settle_ticks": self.settle_ticks,
             "state": self.state, "rep": self.rep, "cell_idx": self.cell_idx,
@@ -203,7 +249,9 @@ class FactorialExperiment:
     def from_dict(cls, d):
         exp = cls(d["a"], d["b"], (0, 1), (0, 1),
                   replicates=d.get("replicates", 3),
-                  settle_ticks=d.get("settle_ticks", 1))
+                  settle_ticks=d.get("settle_ticks", 1),
+                  source=d.get("source", "report"),
+                  rationale=d.get("rationale", ""))
         exp.level_a = d.get("level_a", exp.level_a)
         exp.level_b = d.get("level_b", exp.level_b)
         exp.state = d.get("state", QUEUED)
@@ -230,9 +278,11 @@ class HypothesisQueue:
         self.max_archive = max_archive
         self.seen = set()        # pairs already queued/tested (dedupe)
 
-    def enqueue_candidates(self, candidates, bounds, max_queue=8):
-        """candidates: list of dicts with 'a','b' (and optional 'p_adj') from the
-        report. Adds any not already queued/active/recently-concluded."""
+    def enqueue_candidates(self, candidates, bounds, max_queue=8, priority=False):
+        """candidates: list of dicts with 'a','b' (and optional 'p_adj','source',
+        'rationale'). Adds any not already queued/active/recently-concluded.
+        priority=True inserts at the FRONT of the queue (used for theory-driven
+        hypotheses so a priori predictions get tested ahead of the data sweep)."""
         added = 0
         for c in candidates:
             a, b = c.get("a"), c.get("b")
@@ -243,8 +293,13 @@ class HypothesisQueue:
                 continue
             if a not in bounds or b not in bounds:
                 continue
-            exp = FactorialExperiment(a, b, bounds[a], bounds[b])
-            self.queue.append(exp)
+            exp = FactorialExperiment(a, b, bounds[a], bounds[b],
+                                      source=c.get("source", "report"),
+                                      rationale=c.get("rationale", ""))
+            if priority:
+                self.queue.insert(0, exp)
+            else:
+                self.queue.append(exp)
             self.seen.add(key)
             added += 1
             if len(self.queue) >= max_queue:
@@ -269,7 +324,8 @@ class HypothesisQueue:
 
     def state(self):
         return {
-            "queued": [{"pair": e.pair, "a": e.a, "b": e.b, "state": QUEUED}
+            "queued": [{"pair": e.pair, "a": e.a, "b": e.b, "state": QUEUED,
+                        "source": e.source, "rationale": e.rationale}
                        for e in self.queue],
             "active": self.active.progress() if self.active else None,
             "archive": self.archive[:12],

@@ -37,6 +37,7 @@ import os
 import random
 from datetime import datetime, timezone
 
+import hypotheses
 from hypotheses import HypothesisQueue
 
 
@@ -297,6 +298,19 @@ class Gardener:
             return 0
         bounds = {k: (v[0], v[1]) for k, v in self.KNOBS.items()}
         return self.hyp.enqueue_candidates(cands, bounds)
+
+    def seed_theory_hypotheses(self):
+        """Queue the a-priori, mechanistically-motivated interaction pairs
+        (hypotheses.THEORY_PAIRS) ahead of the data-driven candidates. These are
+        predictions I expect to interact for a stated reason; the same controlled
+        2x2 test falsifies them, so tagging source='theory' lets us compare whether
+        reasoned guesses survive better than blind screening. Idempotent: dedupe
+        by pair means re-calling won't double-queue."""
+        bounds = {k: (v[0], v[1]) for k, v in self.KNOBS.items()}
+        cands = [{"a": a, "b": b, "source": "theory", "rationale": why}
+                 for (a, b, why) in hypotheses.THEORY_PAIRS
+                 if a in self.KNOBS and b in self.KNOBS]
+        return self.hyp.enqueue_candidates(cands, bounds, max_queue=99, priority=True)
 
     # ---------------------------------------------------------------
     def _significance(self, s):

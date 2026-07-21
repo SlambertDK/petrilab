@@ -308,6 +308,14 @@ def _report_loop(interval=120):
 def main():
     os.makedirs(os.path.join(HERE, "data"), exist_ok=True)
     _load_state()   # restore sim + gardener brain BEFORE the loop starts
+    # seed the a-priori theory-driven interaction hypotheses at the front of the
+    # queue (idempotent — dedupes against anything already queued/tested)
+    try:
+        n = gardener.seed_theory_hypotheses()
+        if n:
+            print(f"[hyp] seeded {n} theory-driven interaction hypotheses", flush=True)
+    except Exception as e:
+        print(f"[hyp] theory seed failed: {e}", flush=True)
 
     def _on_signal(signum, frame):
         # clean shutdown (systemctl stop/restart sends SIGTERM) -> flush to disk
