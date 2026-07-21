@@ -46,6 +46,9 @@ gardener = Gardener(findings_path=FINDINGS_PATH)
 
 _running = True
 _speed = 200          # gens per loop batch
+# Read-only snapshot published by the sim loop each batch; /api/state serves this
+# without acquiring _lock, so viewers never block the simulation (and vice-versa).
+_SNAP = {"state": None}
 _viewers = {}         # anonymous viewer-id -> last-seen epoch (live-viewer count)
 _last_modes = {}
 _last_falsi = {}
@@ -123,7 +126,13 @@ def _loop():
                         if sim.generation % SAVE_EVERY == 0:
                             _save_state()
                 done += chunk
-                time.sleep(0)   # yield the GIL / give the lock to a waiting reader
+                time.sleep(0.003)  # real yield so the API thread gets scheduled
+            # publish a fresh read-only snapshot for /api/state to serve WITHOUT
+            # taking _lock — readers never contend with the sim loop again.
+            try:
+                _SNAP["state"] = _build_state()
+            except Exception:
+                pass
         time.sleep(0.02)
 
 
@@ -175,7 +184,16 @@ def api_state(v: str | None = None):
     cutoff = now - 15
     for vid in [k for k, t in _viewers.items() if t < cutoff]:
         del _viewers[vid]
-    return JSONResponse(_build_state())
+    # Serve the latest lock-free snapshot published by the sim loop. Fall back to
+    # a fresh (locked) build only until the first snapshot exists.
+    snap = _SNAP.get("state")
+    if snap is None:
+        snap = _build_state()
+    snap = dict(snap)
+    snap["viewers"] = len(_viewers)
+    snap["running"] = _running
+    snap["speed"] = _speed
+    return JSONResponse(snap)
 
 
 @app.post("/api/toggle")

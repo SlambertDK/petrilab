@@ -290,9 +290,8 @@ class Gardener:
         cands = []
         for e in models.get("interactions_2way", []):
             if e.get("verdict") == "candidate":
-                pair = e.get("pair", "")
-                if "*" in pair:
-                    a, b = pair.split("*", 1)
+                a, b = e.get("a"), e.get("b")
+                if a and b:
                     cands.append({"a": a, "b": b, "p_adj": e.get("p_adj")})
         if not cands:
             return 0

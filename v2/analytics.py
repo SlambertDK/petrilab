@@ -323,11 +323,17 @@ def build_models(path=OBS_PATH):
     # across the whole pair family so a single hit must survive multiplicity.
     inter = []
     ipvals = []
-    cy = _col(rows, "complexity")
+    # Interactions are screened on the most RECENT window of observations, not the
+    # whole history: it keeps the permutation cost bounded as the log grows (so the
+    # build never starves the sim), and it tests the regime the gardener is actually
+    # in now rather than smearing across long-dead configurations.
+    INTER_WINDOW = 600
+    irows = rows[-INTER_WINDOW:] if len(rows) > INTER_WINDOW else rows
+    cy = _col(irows, "complexity")
     for a in range(len(KNOBS)):
         for b in range(a + 1, len(KNOBS)):
             ka, kb = KNOBS[a], KNOBS[b]
-            res = sc.interaction_test(_col(rows, ka), _col(rows, kb), cy, nperm=400)
+            res = sc.interaction_test(_col(irows, ka), _col(irows, kb), cy, nperm=400)
             if res.get("p") is None:
                 continue
             e = {"pair": f"{ka} × {kb}", "a": ka, "b": kb,
@@ -347,11 +353,12 @@ def build_models(path=OBS_PATH):
     models["method_notes"].append(
         "Two-way interactions on complexity are screened per knob pair with a "
         "moving-block Freedman-Lane permutation test (autocorrelation-preserving) "
-        "over all %d pairs, FDR-corrected. Because the knobs are themselves "
-        "autocorrelated (one changed at a time), these are flagged as CANDIDATES "
-        "for controlled follow-up, not confirmed interactions — the univariate "
-        "analysis cannot see them at all, but confirming them needs a targeted "
-        "A/B run (cf. H0008)." % len(inter))
+        "on the most recent window of observations, controlling for both main "
+        "effects, then FDR-corrected across all pairs. Because the knobs are "
+        "themselves autocorrelated (one changed at a time), survivors are flagged "
+        "as CANDIDATES for controlled follow-up, not confirmed interactions — the "
+        "univariate analysis cannot see them at all, but confirming them needs a "
+        "targeted 2x2 experiment (cf. H0008), which the gardener now runs.")
 
     # recipe for big cells
     models["recipe"] = _recipe(rows, "complexity")

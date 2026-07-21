@@ -111,6 +111,29 @@
   .loopstep .s{padding:2px 7px;border:1px solid var(--line);border-radius:20px}
   .loopstep .s.act{border-color:var(--cyan);color:var(--cyan)}
   .credit{display:flex;flex-direction:column;gap:6px;margin-top:6px}
+  .testnow{border:1px solid var(--line);border-radius:9px;padding:10px 11px;background:rgba(56,189,248,.05)}
+  .testnow .pair{font-family:var(--mono);font-size:13px;color:var(--cyan);font-weight:700}
+  .testnow .cells{display:flex;gap:5px;margin:8px 0 6px}
+  .testnow .cell{flex:1;text-align:center;font-family:var(--mono);font-size:9px;padding:5px 2px;border-radius:5px;border:1px solid var(--line);color:var(--faint)}
+  .testnow .cell.on{border-color:var(--cyan);color:var(--cyan);background:rgba(56,189,248,.12);box-shadow:0 0 8px rgba(56,189,248,.3)}
+  .testnow .cell.done{color:var(--dim);border-color:var(--dim)}
+  .testnow .pbar{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin-top:4px}
+  .testnow .pbar > i{display:block;height:100%;background:linear-gradient(90deg,var(--blue),var(--cyan))}
+  .testnow .meta{font-size:10px;color:var(--dim);margin-top:6px;line-height:1.5}
+  .queue{display:flex;flex-direction:column;gap:4px}
+  .queue .q{display:flex;justify-content:space-between;font-family:var(--mono);font-size:11px;color:var(--dim);padding:4px 8px;border:1px dashed var(--line);border-radius:6px}
+  .queue .q .n{color:var(--faint)}
+  .queue .empty,.verdicts .empty{font-size:11px;color:var(--faint);font-style:italic}
+  .verdicts{display:flex;flex-direction:column;gap:5px}
+  .verdicts .vd{display:flex;flex-direction:column;gap:2px;padding:6px 9px;border-radius:7px;border:1px solid var(--line)}
+  .verdicts .vd .top{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:11px}
+  .verdicts .vd .pair{color:var(--ink)}
+  .verdicts .vd .badge{font-size:9px;padding:2px 7px;border-radius:20px;font-weight:700;letter-spacing:.5px}
+  .verdicts .vd .why{font-size:10px;color:var(--dim)}
+  .vb-confirmed{background:rgba(74,222,128,.15);color:var(--green)}
+  .vb-leaning{background:rgba(56,189,248,.15);color:var(--cyan)}
+  .vb-no{background:rgba(148,163,184,.12);color:var(--faint)}
+  .vb-inconclusive{background:rgba(148,163,184,.1);color:var(--faint)}
   .credit .cr{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px}
   .credit .bar{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--blue),var(--cyan))}
   .credit .kn{width:118px;color:var(--dim)}
@@ -228,16 +251,26 @@
       <div class="panel">
         <div class="phead"><span class="glow" style="background:var(--amber);box-shadow:0 0 8px var(--amber)"></span>
           <h2>The Gardener · self-improving loop</h2>
-          <span class="help">?<span class="htext">An autonomous experimenter. It forms a hypothesis, tunes ONE ratio (never rules/DNA), measures the effect, keeps or reverts, and learns which knobs help — biasing future hypotheses toward them.</span></span></div>
+          <span class="help">?<span class="htext">An autonomous experimenter. Single-knob probes find candidate interactions; those candidates are queued and each is confirmed or rejected with a controlled 2×2 factorial experiment (both knobs varied). It never touches rules/DNA — only ratios.</span></span></div>
         <div class="pbody">
           <div class="loopstep">
             <span class="s" id="ls1">1 · HYPOTHESIS</span><span>→</span>
-            <span class="s" id="ls2">2 · TEST</span><span>→</span>
+            <span class="s" id="ls2">2 · TEST 2×2</span><span>→</span>
             <span class="s" id="ls3">3 · MEASURE</span><span>→</span>
             <span class="s" id="ls4">4 · LEARN</span>
           </div>
           <div class="hyp" id="hyp"></div>
-          <div style="font-size:9px;letter-spacing:1.5px;color:var(--faint);margin:4px 0 2px">LEARNED KNOB CREDIT (what has helped)</div>
+
+          <div style="font-size:9px;letter-spacing:1.5px;color:var(--faint);margin:14px 0 3px">② TESTING NOW · controlled 2×2 interaction experiment</div>
+          <div class="testnow" id="testnow"></div>
+
+          <div style="font-size:9px;letter-spacing:1.5px;color:var(--faint);margin:14px 0 3px">① HYPOTHESIS QUEUE · candidate interactions awaiting a test</div>
+          <div class="queue" id="queue"></div>
+
+          <div style="font-size:9px;letter-spacing:1.5px;color:var(--faint);margin:14px 0 3px">③ VERDICTS · what the controlled tests concluded</div>
+          <div class="verdicts" id="verdicts"></div>
+
+          <div style="font-size:9px;letter-spacing:1.5px;color:var(--faint);margin:14px 0 2px">④ LEARNED KNOB CREDIT (what has helped)</div>
           <div class="credit" id="credit"></div>
           <div style="font-size:9px;letter-spacing:1.5px;color:var(--faint);margin:14px 0 2px">EXPERIMENT LOG</div>
           <div class="glog" id="glog"></div>
@@ -286,10 +319,21 @@ function renderResearch(){
 // ---------- petri rendering + hover ----------
 let last=null, hover=null, mouse={x:-1,y:-1};
 const petri=$('petri'), pctx=petri.getContext('2d');
+// Smooth-motion store: each cell's DISPLAYED position eases toward its latest
+// snapshot position every animation frame. The backend still updates ~1×/s, but
+// the dish now glides at 60fps instead of jumping. This is a visual interpolation
+// between real snapshots — not extra simulated states — which is honest for a
+// "living dish" view and costs only the client GPU (no extra backend load).
+const _disp={};   // id -> {x,y} currently displayed (normalised 0..1 sim coords)
 function sizeCanvas(cv){
   const r=cv.getBoundingClientRect(), dpr=window.devicePixelRatio||1;
-  cv.width=r.width*dpr; cv.height=r.height*dpr;
-  const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  const wantW=Math.round(r.width*dpr), wantH=Math.round(r.height*dpr);
+  // Only touch the backing store when the size actually changed — resizing a
+  // canvas clears it and forces layout, so doing it every frame (60fps) is waste.
+  if(cv.width!==wantW||cv.height!==wantH){
+    cv.width=wantW; cv.height=wantH;
+    const ctx=cv.getContext('2d'); ctx.setTransform(dpr,0,0,dpr,0,0);
+  }
   return {w:r.width,h:r.height};
 }
 function drawPetri(){
@@ -297,10 +341,21 @@ function drawPetri(){
   const {w,h}=sizeCanvas(petri);
   pctx.clearRect(0,0,w,h);
   const nodes=last.nodes||[], edges=last.edges||[];
-  // auto-fit: map the cells' bounding box into the square with padding
+  // ease displayed positions toward the latest snapshot targets
+  const EASE=0.18;              // 0..1 — higher = snappier, lower = smoother
+  const alive={};
+  nodes.forEach(n=>{
+    alive[n.id]=1;
+    const d=_disp[n.id];
+    if(!d){ _disp[n.id]={x:n.x,y:n.y}; }        // new cell: appear at its spot
+    else { d.x+=(n.x-d.x)*EASE; d.y+=(n.y-d.y)*EASE; }
+  });
+  // drop cells that no longer exist so the store doesn't grow unbounded
+  for(const id in _disp){ if(!alive[id]) delete _disp[id]; }
+  // auto-fit: map the DISPLAYED bounding box into the square with padding
   const pad=28;
   let minx=1,maxx=0,miny=1,maxy=0;
-  nodes.forEach(n=>{minx=Math.min(minx,n.x);maxx=Math.max(maxx,n.x);miny=Math.min(miny,n.y);maxy=Math.max(maxy,n.y);});
+  nodes.forEach(n=>{const d=_disp[n.id]||n;minx=Math.min(minx,d.x);maxx=Math.max(maxx,d.x);miny=Math.min(miny,d.y);maxy=Math.max(maxy,d.y);});
   const spanx=Math.max(maxx-minx,.12), spany=Math.max(maxy-miny,.12);
   const span=Math.max(spanx,spany); // keep aspect square so tissue shape is honest
   const cx=(minx+maxx)/2, cy=(miny+maxy)/2;
@@ -308,7 +363,7 @@ function drawPetri(){
   const X=x=>w/2+((x-cx)/span)*S;
   const Y=y=>h/2+((y-cy)/span)*S;
   const pos={};
-  nodes.forEach(n=>pos[n.id]=[X(n.x),Y(n.y)]);
+  nodes.forEach(n=>{const d=_disp[n.id]||n;pos[n.id]=[X(d.x),Y(d.y)];});
   // edges
   pctx.lineWidth=.6;
   edges.forEach(e=>{
@@ -395,26 +450,70 @@ function renderFalsi(){
 // ---------- gardener ----------
 function renderGardener(){
   const g=(last&&last.gardener)||{};
-  // loop step highlight — follow the real phase
+  const H=g.hypotheses||{};
+  const active=H.active;
+  // loop step highlight — follow the real phase. A factorial test lights up TEST→MEASURE.
   const phase=g.phase||'idle';
-  const map={idle:'ls1',test:'ls2',measure:'ls3',learn:'ls4'};
+  let step='ls1';
+  if(phase.startsWith('factorial')) step='ls2';
+  else if(phase==='test') step='ls2';
+  else if(phase==='measure') step='ls3';
+  else if(phase==='learn') step='ls4';
   ['ls1','ls2','ls3','ls4'].forEach(id=>$(id).classList.remove('act'));
-  $(map[phase]||'ls1').classList.add('act');
-  // hypothesis card
+  $(step).classList.add('act');
+  if(active) $('ls3').classList.add('act');
+  // hypothesis card (single-knob probe state)
   const h=g.hypothesis, lo=g.last_outcome;
   if(h){
-    $('hyp').innerHTML=`<div class="row"><span class="tag"><span class="live-dot"></span>ACTIVE HYPOTHESIS · TESTING</span>
+    $('hyp').innerHTML=`<div class="row"><span class="tag"><span class="live-dot"></span>ACTIVE PROBE · single knob</span>
       <span class="tag">baseline ${fmt(h.baseline_score,3)}</span></div>
       <div class="big">${h.knob} : ${fmt(h.from,3)} <span class="arrow">→</span> ${fmt(h.to,3)}</div>
-      <div class="why">Nudged one ratio. Measuring the four MODES axes for a full evaluation window, then it will keep or revert based on the change in score.</div>`;
+      <div class="why">Nudging one ratio to spot candidate effects. Pairs that look like they interact get promoted to a controlled 2×2 test below.</div>`;
   }else if(lo){
     const kept=lo.action.startsWith('KEEP');
-    $('hyp').innerHTML=`<div class="row"><span class="tag">LAST OUTCOME · ${kept?'LEARNED (kept)':'REVERTED'}</span>
+    $('hyp').innerHTML=`<div class="row"><span class="tag">LAST PROBE · ${kept?'LEARNED (kept)':'REVERTED'}</span>
       <span class="tag">score ${fmt(g.current_score,3)}</span></div>
       <div class="big" style="color:${kept?'var(--green)':'var(--amber)'}">${lo.action}</div>
-      <div class="why">${lo.reason}. Idle — will form the next hypothesis shortly, biased toward knobs that have paid off.</div>`;
+      <div class="why">${lo.reason}.</div>`;
   }else{$('hyp').innerHTML=`<div class="why">Warming up — first hypothesis forming…</div>`;}
-  // credit bars
+
+  // ② TESTING NOW — the live 2x2 factorial experiment
+  if(active){
+    const cellOrder=['ll','hl','lh','hh'];
+    const cur=active.cell;
+    const cellsHtml=cellOrder.map(c=>{
+      const isOn=c===cur;
+      const done=active.done>cellOrder.indexOf(c)+active.rep*4 || (active.rep>0&&!isOn);
+      return `<div class="cell ${isOn?'on':''}">${c.toUpperCase()}</div>`;
+    }).join('');
+    $('testnow').innerHTML=`<div class="pair">${active.a} × ${active.b}</div>
+      <div class="cells">${cellsHtml}</div>
+      <div class="pbar"><i style="width:${Math.round((active.frac||0)*100)}%"></i></div>
+      <div class="meta">Varying <b>both</b> knobs across 4 cells (lo/hi × lo/hi), replicate ${active.rep+1}/${active.replicates}.
+      Measuring the interaction contrast (hh−lh)−(hl−ll) — how much ${active.a}'s effect depends on ${active.b}.
+      ${active.contrasts&&active.contrasts.length?`Replicate contrasts so far: ${active.contrasts.join(', ')}.`:''}</div>`;
+  }else{
+    $('testnow').innerHTML=`<div class="meta" style="color:var(--faint)">No active interaction test. Waiting for the report to flag a candidate pair, or the queue to advance.</div>`;
+  }
+
+  // ① QUEUE — candidates waiting
+  const q=(H.queued||[]);
+  $('queue').innerHTML=q.length?q.map((e,i)=>`<div class="q"><span>${e.a} × ${e.b}</span><span class="n">#${i+1} queued</span></div>`).join('')
+    : `<div class="empty">Queue empty — the report hasn't flagged new candidate interactions since the last sweep.</div>`;
+
+  // ③ VERDICTS — concluded tests
+  const arch=(H.archive||[]);
+  const badge={'interaction-confirmed':['CONFIRMED','vb-confirmed'],'leaning':['LEANING','vb-leaning'],
+    'no-interaction':['NO INTERACTION','vb-no'],'inconclusive':['INCONCLUSIVE','vb-inconclusive']};
+  $('verdicts').innerHTML=arch.length?arch.map(a=>{
+    const b=badge[a.verdict]||['—','vb-no'];
+    const eff=a.effect==null?'—':a.effect, p=a.p==null?'—':a.p;
+    return `<div class="vd"><div class="top"><span class="pair">${a.a} × ${a.b}</span>
+      <span class="badge ${b[1]}">${b[0]}</span></div>
+      <div class="why">interaction effect ${eff} · p=${p} · ${a.rep} controlled replicates</div></div>`;
+  }).join('') : `<div class="empty">No controlled tests concluded yet — the first 2×2 experiment is still running or pending.</div>`;
+
+  // ④ credit bars
   const cr=(g.knob_credit||[]).slice(0,7);
   const mx=Math.max(1,...cr.map(c=>c.credit));
   $('credit').innerHTML=cr.map(c=>`<div class="cr"><span class="kn">${c.knob}</span>
@@ -423,7 +522,7 @@ function renderGardener(){
   // log
   const log=(last&&last.gardener_log)||[];
   $('glog').innerHTML=log.slice().reverse().map(e=>{
-    const cls=e.action.startsWith('TRY')?'try':e.action.startsWith('KEEP')?'keep':'revert';
+    const cls=e.action.startsWith('TRY')?'try':e.action.startsWith('KEEP')?'keep':e.action.startsWith('INTERACTION')?'keep':'revert';
     return `<div class="ge ${cls}"><div class="a"><span class="g">GEN ${e.gen}</span>${e.action}</div>
       <div class="r">${e.reason}</div></div>`;}).join('');
 }
@@ -443,7 +542,7 @@ async function tick(){
     $('s-lin').textContent=fmt(last.lineage_count);
     $('s-exp').textContent=fmt((last.gardener||{}).experiments_run);
     if($('spdLbl')){$('spdLbl').textContent='SPEED · '+last.speed;}
-    drawPetri();drawModes();renderMlegend();renderFalsi();renderGardener();
+    drawModes();renderMlegend();renderFalsi();renderGardener();
   }catch(e){$('liveTag').style.color='var(--red)';$('liveTag').textContent='● OFFLINE';}
 }
 renderResearch();
@@ -464,6 +563,11 @@ renderResearch();
   document.body.addEventListener('mouseout',e=>{if(e.target.closest('.help'))tip.style.opacity=0;});
 })();
 setInterval(tick,1000);tick();
+// 60fps render loop for the dish: reads the latest snapshot in `last` and eases
+// cell positions toward it, so motion is smooth between the ~1s data updates.
+// Pauses when the tab is hidden to save the client's battery/GPU.
+function raf(){ if(!document.hidden) drawPetri(); requestAnimationFrame(raf); }
+requestAnimationFrame(raf);
 window.addEventListener('resize',()=>{drawPetri();drawModes();});
 </script>
 </body>
