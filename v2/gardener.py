@@ -37,6 +37,8 @@ import os
 import random
 from datetime import datetime, timezone
 
+from hypotheses import HypothesisQueue
+
 
 class Gardener:
     # ratios the gardener may tune, with (min, max, nudge step)
@@ -83,6 +85,13 @@ class Gardener:
         # (real accumulation, Wolfram class 4) or merely REPEAT (oscillation, class 2)
         self.cplx_history = []        # list of [gen, complexity], capped
         self.CPLX_HISTORY_MAX = 240
+        # --- hypothesis queue: candidate interaction pairs -> controlled 2x2 tests ---
+        # This closes the loop: the report flags candidate knob-pair interactions,
+        # they are queued here, and the gardener runs ONE at a time as a real 2x2
+        # factorial experiment (varying both knobs) to confirm or reject it.
+        self.hyp = HypothesisQueue()
+        self.hyp_refresh_at = 0       # experiments_run at last candidate refresh
+        self.HYP_REFRESH_EVERY = 20   # pull fresh candidates from report this often
         self.findings_path = findings_path or os.path.join(
             os.path.dirname(__file__), "data", "findings.md")
         # data-science observation log: one JSON row per resolved experiment
@@ -178,6 +187,23 @@ class Gardener:
             self.last_score = score
             return
 
+        # --- hypothesis queue: run one controlled 2x2 factorial cell per tick ---
+        # This takes priority over single-knob probes: when a candidate interaction
+        # is being tested, the gardener is busy varying BOTH knobs in a controlled
+        # design. One cell measured per tick -> "one at a time", exactly.
+        active = self.hyp.ensure_active()
+        if active is not None:
+            finished = active.step(sim, score, self._set_knob)
+            self.phase = f"factorial:{active.pair}:{active.current_cell}"
+            if finished:
+                prog = active.progress()
+                self._logi(gen, f"INTERACTION {active.pair}: {active.verdict}",
+                           f"effect={prog['effect']} p={prog['p']} "
+                           f"over {prog['rep']} replicates")
+                self.hyp.complete_active()
+            self.last_score = score
+            return
+
         # --- decide whether to intervene ---
         stagnating = (modes_rec.get("novelty", 0) < 0.15) or falsi["verdict"] != "success"
         if not stagnating:
@@ -244,6 +270,34 @@ class Gardener:
         mx = max(ucb.values())
         weights = [math.exp((ucb[k] - mx) / temp) for k in knobs]
         return self.rng.choices(knobs, weights=weights, k=1)[0]
+
+    # ---------------------------------------------------------------
+    def _set_knob(self, sim, knob, value):
+        """Set a tunable ratio, clamped to its declared bounds. Used by the
+        factorial experiments so a 2x2 cell can never push a knob out of range."""
+        if knob in self.KNOBS:
+            lo, hi, _ = self.KNOBS[knob]
+            value = max(lo, min(hi, value))
+        setattr(sim, knob, value)
+
+    def enqueue_from_models(self, models):
+        """Queue new candidate interaction pairs from an already-built report.
+        The heavy model build happens OFF the gardener tick (in the server's
+        report thread); the gardener never blocks on it — it just receives the
+        candidates. This keeps the sim loop and /api/state responsive."""
+        if not models:
+            return 0
+        cands = []
+        for e in models.get("interactions_2way", []):
+            if e.get("verdict") == "candidate":
+                pair = e.get("pair", "")
+                if "*" in pair:
+                    a, b = pair.split("*", 1)
+                    cands.append({"a": a, "b": b, "p_adj": e.get("p_adj")})
+        if not cands:
+            return 0
+        bounds = {k: (v[0], v[1]) for k, v in self.KNOBS.items()}
+        return self.hyp.enqueue_candidates(cands, bounds)
 
     # ---------------------------------------------------------------
     def _significance(self, s):
@@ -505,6 +559,7 @@ class Gardener:
             "experiments_run": self.experiments_run,
             "current_score": round(self.last_score, 3) if self.last_score is not None else None,
             "phase": self.phase,
+            "hypotheses": self.hyp.state(),
         }
 
     # ---------------------------------------------------------------
@@ -524,6 +579,8 @@ class Gardener:
             "phase": self.phase,
             # keep an in-flight experiment so a restart mid-test doesn't lose it
             "pending": self.pending,
+            "hyp": self.hyp.to_dict(),
+            "hyp_refresh_at": self.hyp_refresh_at,
         }
 
     def load_dict(self, d):
@@ -552,3 +609,8 @@ class Gardener:
         self.cooldown = int(d.get("cooldown", 0))
         self.phase = d.get("phase", "idle")
         self.pending = d.get("pending", None)
+        try:
+            self.hyp.load_dict(d.get("hyp"))
+        except Exception:
+            pass
+        self.hyp_refresh_at = int(d.get("hyp_refresh_at", 0))

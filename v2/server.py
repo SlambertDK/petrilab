@@ -53,6 +53,7 @@ _lock = threading.Lock()
 
 MEASURE_EVERY = 10    # gens between MODES samples
 GARDEN_EVERY = 50     # gens between gardener ticks
+_LOCK_CHUNK = 25      # sim steps per lock acquisition — keeps /api/state responsive
 
 
 def _atomic_write(path, text):
@@ -104,17 +105,25 @@ def _loop():
     global _last_modes, _last_falsi
     while True:
         if _running:
-            with _lock:
-                for _ in range(_speed):
-                    sim.step()
-                    if sim.generation % MEASURE_EVERY == 0:
-                        rec, _census = modes.update(sim)
-                        _last_modes = rec
-                    if sim.generation % GARDEN_EVERY == 0:
-                        _last_falsi = modes.falsification(sim)
-                        gardener.observe(sim, _last_modes or {}, _last_falsi)
-                    if sim.generation % SAVE_EVERY == 0:
-                        _save_state()
+            # Run the batch in small chunks, RELEASING the lock between chunks so
+            # readers (/api/state) can grab it. Holding _lock for a full 200-step
+            # batch starves the API once the population grows large.
+            done = 0
+            while done < _speed:
+                chunk = min(_LOCK_CHUNK, _speed - done)
+                with _lock:
+                    for _ in range(chunk):
+                        sim.step()
+                        if sim.generation % MEASURE_EVERY == 0:
+                            rec, _census = modes.update(sim)
+                            _last_modes = rec
+                        if sim.generation % GARDEN_EVERY == 0:
+                            _last_falsi = modes.falsification(sim)
+                            gardener.observe(sim, _last_modes or {}, _last_falsi)
+                        if sim.generation % SAVE_EVERY == 0:
+                            _save_state()
+                done += chunk
+                time.sleep(0)   # yield the GIL / give the lock to a waiting reader
         time.sleep(0.02)
 
 
@@ -264,6 +273,14 @@ def _report_loop(interval=120):
             _REPORT["models"] = models
             _REPORT["html"] = html
             _REPORT["built_at"] = time.time()
+            # feed fresh candidate interactions into the gardener's queue so it can
+            # run controlled 2x2 tests on them — the loop feeding itself. The heavy
+            # build happened here (off the sim tick), so the gardener never blocks.
+            try:
+                with _lock:
+                    gardener.enqueue_from_models(models)
+            except Exception:
+                pass
         except Exception as e:
             if _REPORT["html"] is None:
                 _REPORT["html"] = f"<h1>PetriLab report</h1><pre>report error: {e}</pre>"
